@@ -3,3 +3,4 @@
 pub mod audio_convert;
 pub mod blip;
 pub mod playback_queue;
+pub mod volume;
