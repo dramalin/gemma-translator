@@ -43,6 +43,37 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<CliOptions, Stri
     Ok(options)
 }
 
+/// Loads the config and returns it with the path settings are saved to. A file
+/// that cannot be read or parsed is renamed to `<name>.bad` so the first saved
+/// settings change does not overwrite it; if even that fails, settings are not
+/// saved this session.
+fn load_config(path: PathBuf) -> (Config, Option<PathBuf>) {
+    let error = match Config::load(&path) {
+        Ok(config) => return (config, Some(path)),
+        Err(error) => error,
+    };
+    let mut bad_name = path.clone().into_os_string();
+    bad_name.push(".bad");
+    let bad_path = PathBuf::from(bad_name);
+    match std::fs::rename(&path, &bad_path) {
+        Ok(()) => {
+            eprintln!(
+                "[config] {error}; moved it to {} and using defaults",
+                bad_path.display()
+            );
+            (Config::default(), Some(path))
+        }
+        Err(rename_error) => {
+            eprintln!(
+                "[config] {error}; cannot move it to {} ({rename_error}); \
+                 using defaults and not saving settings",
+                bad_path.display()
+            );
+            (Config::default(), None)
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let options = match parse_args(std::env::args().skip(1)) {
         Ok(options) => options,
@@ -51,13 +82,9 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let config_path = options.config_path.or_else(Config::default_path);
-    let config = match &config_path {
-        Some(path) => Config::load(path).unwrap_or_else(|error| {
-            eprintln!("[config] {error}; using defaults");
-            Config::default()
-        }),
-        None => Config::default(),
+    let (config, config_path) = match options.config_path.or_else(Config::default_path) {
+        Some(path) => load_config(path),
+        None => (Config::default(), None),
     };
     let window = match AppWindow::new() {
         Ok(window) => window,
@@ -103,6 +130,8 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+    use translator_core::keys::KeyboardMode;
+
     use super::*;
 
     fn args(list: &[&str]) -> Vec<String> {
@@ -131,5 +160,54 @@ mod tests {
     fn rejects_unknown_and_incomplete_arguments() {
         assert!(parse_args(args(&["--verbose"])).is_err());
         assert!(parse_args(args(&["--config"])).is_err());
+    }
+
+    #[test]
+    fn invalid_config_is_moved_aside_before_anything_is_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "theme_color = [broken").unwrap();
+        let (config, save_path) = load_config(path.clone());
+        assert_eq!(config, Config::default());
+        assert_eq!(save_path.as_ref(), Some(&path));
+        assert!(!path.exists());
+        let bad_path = dir.path().join("config.toml.bad");
+        assert_eq!(
+            std::fs::read_to_string(&bad_path).unwrap(),
+            "theme_color = [broken"
+        );
+        config.save(&path).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&bad_path).unwrap(),
+            "theme_color = [broken"
+        );
+    }
+
+    #[test]
+    fn missing_or_valid_config_is_loaded_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        assert_eq!(
+            load_config(path.clone()),
+            (Config::default(), Some(path.clone()))
+        );
+        std::fs::write(&path, "keyboard_mode = \"vertical\"\n").unwrap();
+        let (config, save_path) = load_config(path.clone());
+        assert_eq!(config.keyboard_mode, KeyboardMode::Vertical);
+        assert_eq!(save_path, Some(path));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn config_that_cannot_be_moved_aside_disables_saving() {
+        let dir = tempfile::tempdir().unwrap();
+        // A directory where the file should be: unreadable as a config, and
+        // the rename onto an occupied non-empty `.bad` directory fails.
+        let path = dir.path().join("config.toml");
+        std::fs::create_dir(&path).unwrap();
+        let bad_path = dir.path().join("config.toml.bad");
+        std::fs::create_dir(&bad_path).unwrap();
+        std::fs::write(bad_path.join("keep"), "").unwrap();
+        assert_eq!(load_config(path), (Config::default(), None));
     }
 }
