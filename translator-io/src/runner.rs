@@ -155,6 +155,12 @@ fn run_job(context: JobContext, request: JobRequest, samples: Vec<f32>) {
             job,
             message: error.to_string(),
         });
+        // The controller is Idle now: stop speaking the sentences already sent.
+        // Set only after Failed, because `emit` is silent once cancel is set.
+        cancel.store(true, Ordering::SeqCst);
+        if let Some(speaker) = speaker {
+            let _ = speaker.join();
+        }
         return;
     }
     emit(JobEvent::TranslationFinished { job });

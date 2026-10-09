@@ -83,6 +83,43 @@ impl Translator for BlockingTranslator {
     }
 }
 
+/// Emits its sentences, then fails.
+struct FailingTranslator(Vec<&'static str>, PipelineError);
+
+impl Translator for FailingTranslator {
+    fn translate_streaming(
+        &self,
+        _text: &str,
+        _source: LanguageCode,
+        _target: LanguageCode,
+        _cancel: &AtomicBool,
+        on_sentence: &mut dyn FnMut(String),
+    ) -> Result<(), PipelineError> {
+        for sentence in &self.0 {
+            on_sentence(sentence.to_string());
+        }
+        Err(self.1.clone())
+    }
+}
+
+/// Counts calls; each one waits until `release` is signalled or dropped.
+struct GatedTts {
+    release: Mutex<Receiver<()>>,
+    calls: Arc<AtomicUsize>,
+}
+
+impl TextToSpeech for GatedTts {
+    fn synthesize(&self, _text: &str, _language: LanguageCode) -> Result<AudioClip, PipelineError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        let _ = self
+            .release
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(2));
+        Ok(clip())
+    }
+}
+
 struct ScriptedTts(Result<AudioClip, PipelineError>);
 
 impl TextToSpeech for ScriptedTts {
@@ -324,4 +361,37 @@ fn starting_a_new_job_cancels_the_previous_one() {
         job: JobId(2),
         text: "hello".to_string()
     }));
+}
+
+#[test]
+fn translation_error_stops_speaking_the_sentences_already_sent() {
+    let error = PipelineError::Unreachable {
+        service: "LLM",
+        message: "reset".to_string(),
+    };
+    let (release, release_receiver) = mpsc::channel::<()>();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let (runner, sink, receiver) = runner(
+        ScriptedStt(Ok("hello".to_string())),
+        FailingTranslator(vec!["Uno.", "Dos.", "Tres."], error.clone()),
+        GatedTts {
+            release: Mutex::new(release_receiver),
+            calls: Arc::clone(&calls),
+        },
+    );
+    runner.start(request(1, true), Vec::new());
+    let collected = events(&receiver);
+    assert_eq!(
+        collected.last(),
+        Some(&JobEvent::Failed {
+            job: JobId(1),
+            message: error.to_string()
+        })
+    );
+    // The speaker is blocked in its first synthesis (or never started one);
+    // let every call through and check nothing more is synthesized or queued.
+    drop(release);
+    assert!(events(&receiver).is_empty());
+    assert!(calls.load(Ordering::SeqCst) <= 1);
+    assert!(sink.clips.lock().unwrap().is_empty());
 }
