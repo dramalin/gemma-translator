@@ -1,0 +1,8 @@
+[package]
+name = "translator-io"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+translator-core = { path = "../translator-core" }
