@@ -36,15 +36,15 @@ pub struct Conversation<'engine> {
     /// Target of the latest stream callback's `user_data`, from `Box::into_raw`.
     /// Kept as a raw pointer because a litert thread may dereference it at
     /// any time; owning it through a `Box` would assert unique access.
+    /// Freed only once its final callback has arrived. A state whose final
+    /// callback never arrived (the cancel timed out, the send failed, a
+    /// non-final error ended the wait, or `on_text`/`should_cancel`
+    /// panicked) is leaked: the library may still call into it, even during
+    /// or after `conversation_delete` (conversation.py keeps its ctypes
+    /// callback alive for the same reason). It costs a few hundred bytes.
     stream_state: Option<*mut StreamState>,
     /// Whether the library delivered the final callback for `stream_state`.
     has_stream_ended: bool,
-    /// States (from `Box::into_raw`) of streams whose final callback never
-    /// arrived (the cancel timed out, the send failed, a non-final error
-    /// ended the wait, or `on_text`/`should_cancel` panicked). The library
-    /// may still call into them, so they are freed only after
-    /// `conversation_delete`, after which no callback follows.
-    abandoned_stream_states: Vec<*mut StreamState>,
 }
 
 struct StreamState {
@@ -135,7 +135,6 @@ impl Engine {
             pointer,
             stream_state: None,
             has_stream_ended: false,
-            abandoned_stream_states: Vec::new(),
         })
     }
 }
@@ -162,14 +161,13 @@ impl Conversation<'_> {
             &serde_json::json!({ "role": "user", "content": [{ "type": "text", "text": text }] })
                 .to_string(),
         )?;
-        // A previous state may be freed only if its final callback arrived.
+        // A previous state may be freed only if its final callback arrived;
+        // otherwise it is leaked (see `stream_state`).
         if let Some(previous) = self.stream_state.take() {
             if self.has_stream_ended {
                 // SAFETY: from `Box::into_raw`, freed once; the library made
                 // its final callback, so it no longer uses the pointer.
                 drop(unsafe { Box::from_raw(previous) });
-            } else {
-                self.abandoned_stream_states.push(previous);
             }
         }
         self.has_stream_ended = false;
@@ -179,9 +177,8 @@ impl Conversation<'_> {
         let user_data = state.cast::<c_void>();
 
         let library = &self.engine.library;
-        // SAFETY: valid C strings; `user_data` is freed only after the final
-        // callback or `conversation_delete` (see `stream_state` and
-        // `abandoned_stream_states`).
+        // SAFETY: valid C strings; `user_data` is freed only after its final
+        // callback and is otherwise leaked (see `stream_state`).
         let code = unsafe {
             (library.conversation_send_message_stream)(
                 self.pointer.as_ptr(),
@@ -235,13 +232,15 @@ impl Conversation<'_> {
 
 impl Drop for Conversation<'_> {
     fn drop(&mut self) {
-        // SAFETY: deleted once; no callback follows `conversation_delete`.
+        // SAFETY: the conversation is live and deleted once.
         unsafe { (self.engine.library.conversation_delete)(self.pointer.as_ptr()) }
-        let states = self.stream_state.take().into_iter();
-        for state in states.chain(self.abandoned_stream_states.drain(..)) {
-            // SAFETY: each pointer came from `Box::into_raw` and is freed only
-            // here; the library can no longer call into it.
-            drop(unsafe { Box::from_raw(state) });
+        if let Some(state) = self.stream_state.take() {
+            if self.has_stream_ended {
+                // SAFETY: from `Box::into_raw`, freed once; the library made
+                // its final callback, so it no longer uses the pointer. An
+                // un-finalised state is leaked (see `stream_state`).
+                drop(unsafe { Box::from_raw(state) });
+            }
         }
     }
 }
@@ -255,7 +254,7 @@ unsafe extern "C" fn on_stream_event(
 ) {
     let _ = panic::catch_unwind(AssertUnwindSafe(|| {
         // SAFETY: `user_data` is a `StreamState` the conversation frees only
-        // after the final callback or `conversation_delete`.
+        // after this stream's final callback, and otherwise never frees.
         let state = unsafe { &*(user_data as *const StreamState) };
         let read = |text: *const c_char| {
             // SAFETY: non-NULL strings from the library are NUL-terminated.
