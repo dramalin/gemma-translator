@@ -28,7 +28,7 @@ make run-mock           # Rust/Slint UI with mock services
 cargo test -p translator-core controller   # one crate, tests matching "controller"
 ```
 
-There is no test suite or linter beyond `oxfmt`. `start.sh` kills anything on ports 9379/3000/5173 when not under systemd (`$INVOCATION_ID` unset). In prod, a stale `frontend/dist/` is NOT rebuilt automatically — run `npm run build` after frontend changes.
+The Rust workspace (`translator-core`, `translator-io`, `translator-ui`) is checked with `make test` (all Rust tests plus the Python backend unit tests), `make clippy` and `cargo fmt --all -- --check`; the React frontend has no test suite or linter beyond `oxfmt`. `start.sh` kills anything on ports 9379/3000/5173 when not under systemd (`$INVOCATION_ID` unset). In prod, a stale `frontend/dist/` is NOT rebuilt automatically — run `npm run build` after frontend changes.
 
 ## Architecture
 
