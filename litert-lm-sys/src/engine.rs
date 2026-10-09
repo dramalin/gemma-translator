@@ -33,17 +33,18 @@ pub struct Engine {
 pub struct Conversation<'engine> {
     engine: &'engine Engine,
     pointer: NonNull<c_void>,
-    /// Target of the latest stream callback's `user_data`.
-    stream_state: Option<Box<StreamState>>,
+    /// Target of the latest stream callback's `user_data`, from `Box::into_raw`.
+    /// Kept as a raw pointer because a litert thread may dereference it at
+    /// any time; owning it through a `Box` would assert unique access.
+    stream_state: Option<*mut StreamState>,
     /// Whether the library delivered the final callback for `stream_state`.
     has_stream_ended: bool,
-    /// States of streams whose final callback never arrived (the cancel timed
-    /// out, the send failed, or `on_text`/`should_cancel` panicked). The
-    /// library may still call into them, so they are freed only after
-    /// `conversation_delete`, after which no callback follows. Boxed because
-    /// the library holds their addresses, which a growing `Vec` would move.
-    #[allow(clippy::vec_box)]
-    abandoned_stream_states: Vec<Box<StreamState>>,
+    /// States (from `Box::into_raw`) of streams whose final callback never
+    /// arrived (the cancel timed out, the send failed, a non-final error
+    /// ended the wait, or `on_text`/`should_cancel` panicked). The library
+    /// may still call into them, so they are freed only after
+    /// `conversation_delete`, after which no callback follows.
+    abandoned_stream_states: Vec<*mut StreamState>,
 }
 
 struct StreamState {
@@ -52,7 +53,12 @@ struct StreamState {
 
 enum StreamEvent {
     Chunk(String),
-    Final { error: Option<String> },
+    /// The library reported an error or its final callback (`is_final`).
+    /// Only a final callback means the library is done with `user_data`.
+    End {
+        error: Option<String>,
+        is_final: bool,
+    },
 }
 
 fn c_string(text: &str) -> Result<CString, LiteRtLmError> {
@@ -158,18 +164,24 @@ impl Conversation<'_> {
         )?;
         // A previous state may be freed only if its final callback arrived.
         if let Some(previous) = self.stream_state.take() {
-            if !self.has_stream_ended {
+            if self.has_stream_ended {
+                // SAFETY: from `Box::into_raw`, freed once; the library made
+                // its final callback, so it no longer uses the pointer.
+                drop(unsafe { Box::from_raw(previous) });
+            } else {
                 self.abandoned_stream_states.push(previous);
             }
         }
         self.has_stream_ended = false;
         let (events, receiver) = mpsc::channel();
-        let state = self.stream_state.insert(Box::new(StreamState { events }));
-        let user_data = &**state as *const StreamState as *mut c_void;
+        let state = Box::into_raw(Box::new(StreamState { events }));
+        self.stream_state = Some(state);
+        let user_data = state.cast::<c_void>();
 
         let library = &self.engine.library;
-        // SAFETY: valid C strings; `user_data` outlives every callback (see
-        // `stream_state` and `abandoned_stream_states`).
+        // SAFETY: valid C strings; `user_data` is freed only after the final
+        // callback or `conversation_delete` (see `stream_state` and
+        // `abandoned_stream_states`).
         let code = unsafe {
             (library.conversation_send_message_stream)(
                 self.pointer.as_ptr(),
@@ -197,8 +209,8 @@ impl Conversation<'_> {
                         }
                     }
                 }
-                Ok(StreamEvent::Final { error }) => {
-                    self.has_stream_ended = true;
+                Ok(StreamEvent::End { error, is_final }) => {
+                    self.has_stream_ended = is_final;
                     return stream_end(error);
                 }
                 Err(RecvTimeoutError::Timeout) => {}
@@ -223,9 +235,14 @@ impl Conversation<'_> {
 
 impl Drop for Conversation<'_> {
     fn drop(&mut self) {
-        // SAFETY: deleted once; the stream states are dropped after this body
-        // runs, and no callback follows `conversation_delete`.
+        // SAFETY: deleted once; no callback follows `conversation_delete`.
         unsafe { (self.engine.library.conversation_delete)(self.pointer.as_ptr()) }
+        let states = self.stream_state.take().into_iter();
+        for state in states.chain(self.abandoned_stream_states.drain(..)) {
+            // SAFETY: each pointer came from `Box::into_raw` and is freed only
+            // here; the library can no longer call into it.
+            drop(unsafe { Box::from_raw(state) });
+        }
     }
 }
 
@@ -237,7 +254,8 @@ unsafe extern "C" fn on_stream_event(
     error: *const c_char,
 ) {
     let _ = panic::catch_unwind(AssertUnwindSafe(|| {
-        // SAFETY: `user_data` is a `StreamState` kept alive by the conversation.
+        // SAFETY: `user_data` is a `StreamState` the conversation frees only
+        // after the final callback or `conversation_delete`.
         let state = unsafe { &*(user_data as *const StreamState) };
         let read = |text: *const c_char| {
             // SAFETY: non-NULL strings from the library are NUL-terminated.
@@ -252,7 +270,7 @@ unsafe extern "C" fn on_stream_event(
         }
         let error = read(error);
         if is_final || error.is_some() {
-            let _ = state.events.send(StreamEvent::Final { error });
+            let _ = state.events.send(StreamEvent::End { error, is_final });
         }
     }));
 }
@@ -316,6 +334,29 @@ mod tests {
     fn accepts_string_content_and_falls_back_to_raw_text() {
         assert_eq!(chunk_text(r#"{"role":"assistant","content":"hi"}"#), "hi");
         assert_eq!(chunk_text("not json"), "not json");
+    }
+
+    #[test]
+    fn only_the_final_callback_ends_the_stream() {
+        let (events, receiver) = mpsc::channel();
+        let mut state = StreamState { events };
+        let user_data = (&mut state as *mut StreamState).cast::<c_void>();
+        // SAFETY: `state` outlives both calls; the strings are NUL-terminated.
+        unsafe {
+            on_stream_event(user_data, ptr::null(), false, c"INTERNAL: boom".as_ptr());
+            on_stream_event(user_data, ptr::null(), true, ptr::null());
+        }
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(StreamEvent::End { error: Some(message), is_final: false }) if message == "INTERNAL: boom"
+        ));
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(StreamEvent::End {
+                error: None,
+                is_final: true
+            })
+        ));
     }
 
     #[test]
