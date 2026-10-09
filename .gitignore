@@ -31,3 +31,5 @@ coverage/
 .github/
 .opencode/
 .vscode/
+.omo/
+/package-lock.json
