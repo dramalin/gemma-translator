@@ -24,3 +24,10 @@ server.log
 *.ogg
 *.flac
 coverage/
+.claude/
+.codex/
+.gemini/
+.agents/
+.github/
+.opencode/
+.vscode/
