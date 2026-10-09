@@ -47,7 +47,7 @@
 1. **Run-time loading instead of link-time rpath (spec §8.4).** The sys crates `dlopen` the libraries with `libloading` from `<directory of the translator executable>/lib`, so `make test`, `make run-mock` and cross-builds need no native library. `patchelf --set-rpath '$ORIGIN'` is still applied to `libmoonshine.so`, because `dlopen` resolves the library's own `NEEDED` entry (`libonnxruntime-13ab8084.so.1`) through that library's RPATH.
 2. **`moonshine_get_tts_voices` is not bound** (spec §8.1 lists it). Voice validity is already covered by `moonshine_get_tts_dependencies` (deployment time) and by the synthesizer create call (run time). Binding a function nobody calls breaks the "no unused helpers" rule.
 3. **No litert-lm session config.** Python sets an empty session config. A probe on 2026-10-09 showed that streaming, cancel and engine reuse all work without one.
-4. **Thinking content.** The litert-lm conversation API sends thinking text in a message's `channels` field, never in `content`. `litert_lm_sys::chunk_text` keeps only `content[]` items with `"type": "text"`. `clean_model_reply` still runs on each sentence.
+4. **Thinking content.** Going by the model's channel config (`channels { channel_name: "thought" }`, printed when the engine loads) and `Message.channels` in `_messages.py`, the litert-lm conversation API puts thinking text in a message's `channels` field, not in `content`. The 2026-10-09 probe saw no thinking at all. `litert_lm_sys::chunk_text` keeps only `content[]` items with `"type": "text"`. `clean_model_reply` still runs on each sentence.
 5. **Backend switch.** The new config key `inference_backend` is `"http"` (default) or `"native"`. The default changes, and the HTTP clients are deleted, only in step 11 after the Pi acceptance run. Until then both paths must work.
 6. **Download integrity.**
    - Gemma is pinned to Hugging Face commit `b3ca0d2f076785a8f4b2219ddbd2bdb99954eae1` and checked against sha256 `181938105e0eefd105961417e8da75903eacda102c4fce9ce90f50b97139a63c` (2 588 147 712 bytes). This is the same file `litert-lm import` produced: `cmp` was run against the imported copy.
@@ -85,7 +85,7 @@
 
 ```
 Cargo.toml                               add three workspace members
-Makefile                                 native-libs / models / test-ffi / test-soak / run-native; build-pi adds translator-models
+Makefile                                 native-libs / models / test-ffi / test-soak / run-native
 scripts/fetch-native-libs.sh             download pinned wheels, verify sha256, unpack .so, patchelf
 native/<arch>/lib/                       generated (self-ignoring), not committed
 models/                                  generated dev model dir (self-ignoring), not committed
@@ -122,6 +122,7 @@ translator-io/
   src/native/lru.rs                      LruCache
   src/native/speech.rs                   NativeSpeech (speech thread)
   src/native/translator.rs               NativeTranslator (model thread)
+  tests/native_services.rs               speech + translator services against real libraries (ignored)
   tests/native_pipeline.rs               end-to-end JobRunner over native services (ignored)
 translator-ui/src/app.rs                 choose HTTP or native services from config
 README.md, CLAUDE.md                     native inference section
@@ -1725,11 +1726,7 @@ models: native-libs
 	$(CARGO) run --release -p translator-models -- --lib-dir $(NATIVE_LIB_DIR) --model-dir $(MODEL_DIR)
 ```
 
-Change `build-pi` to also build the model tool:
-
-```make
-	$(CARGO) build --release -p translator-ui -p translator-models --no-default-features --features translator-ui/kms --target $(PI_TARGET)
-```
+Leave `build-pi` unchanged. `translator-models` pulls in rustls/ring, which would need an aarch64 C cross-compiler, so it is built natively on the Pi instead (see the manual checklist).
 
 - [ ] **Step 6: Run the unit tests**
 
@@ -1778,6 +1775,8 @@ git commit -m "Add translator-models to download every model file"
   - `Synthesizer::create(&Arc<MoonshineLibrary>, language_tag: &str, options: &[(&str, &str)]) -> Result<Synthesizer, MoonshineError>`
   - `Synthesizer::synthesize(&mut self, text: &str) -> Result<(Vec<f32>, u32), MoonshineError>`
   - Both types are `!Send`, so they stay on the thread that created them.
+
+The tests pass the synthesizer's 24 kHz output straight to `transcribe` with `sample_rate = 24000`. A Python check on 2026-10-09 confirmed that the C side resamples it: the transcript was "Good morning. How are you today?".
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2898,7 +2897,7 @@ mod tests {
 }
 ```
 
-Integration test that needs the library, in the new file `translator-io/tests/native_speech.rs`:
+Integration tests that need the library, in the new file `translator-io/tests/native_services.rs` (Task 8 appends to it):
 
 ```rust
 use std::path::PathBuf;
@@ -3219,7 +3218,7 @@ fn model_arch(arch: SttModelArch) -> ModelArch {
 - [ ] **Step 4: Run the tests**
 
 Run: `cargo test -p translator-io && make test-ffi && cargo clippy --workspace --all-targets -- -D warnings`
-Expected: the unit tests pass, `test-ffi` passes both `native_speech` tests, and there are no warnings.
+Expected: the unit tests pass, `test-ffi` passes both `native_services` tests, and there are no warnings.
 
 - [ ] **Step 5: Commit**
 
@@ -3524,7 +3523,7 @@ fn translate_once(engine: &Engine, request: &TranslateRequest) -> Result<(), Pip
 }
 ```
 
-Add an ignored integration test at the end of `translator-io/tests/native_speech.rs`, and rename the file to `translator-io/tests/native_services.rs`:
+Add an ignored integration test at the end of `translator-io/tests/native_services.rs`:
 
 ```rust
 use std::sync::atomic::AtomicBool;
