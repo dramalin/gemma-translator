@@ -63,7 +63,7 @@ test-ffi:
 ## test-soak: long-running native memory tests
 .PHONY: test-soak
 test-soak:
-	$(FFI_ENV) $(CARGO) test --release --workspace -- --ignored soak --test-threads=1
+	$(FFI_ENV) $(CARGO) test --release --workspace -- --ignored soak --test-threads=1 --nocapture
 
 ## fmt: format all Rust code
 .PHONY: fmt

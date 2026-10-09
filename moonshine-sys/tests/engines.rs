@@ -117,8 +117,10 @@ fn soak_repeated_transcription_does_not_leak() {
         transcriber.transcribe(&samples, sample_rate).unwrap();
     }
     let growth = resident_kib().saturating_sub(before);
+    eprintln!("RSS grew by {growth} KiB over 1000 transcriptions");
+    // A leaked transcript (lines plus text) per call would exceed this.
     assert!(
-        growth < 16 * 1024,
+        growth < 4 * 1024,
         "RSS grew by {growth} KiB over 1000 transcriptions"
     );
 }
