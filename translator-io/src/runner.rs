@@ -2,6 +2,7 @@
 //! speech-to-text → streaming translation → speech synthesis → playback.
 //! Sentences are synthesized while later ones are still being translated.
 
+use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -83,7 +84,26 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Runs the job and turns a panic in a service into `JobEvent::Failed`,
+/// so the UI is never left waiting for a job that died.
 fn run_job(context: JobContext, request: JobRequest, samples: Vec<f32>) {
+    let on_event = Arc::clone(&context.on_event);
+    let cancel = Arc::clone(&context.cancel);
+    let job = request.id;
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+        run_stages(context, request, samples);
+    }));
+    if outcome.is_err() && !cancel.load(Ordering::SeqCst) {
+        on_event(JobEvent::Failed {
+            job,
+            message: "job thread panicked".to_string(),
+        });
+        // As after a translation error: stop speaking sentences already queued.
+        cancel.store(true, Ordering::SeqCst);
+    }
+}
+
+fn run_stages(context: JobContext, request: JobRequest, samples: Vec<f32>) {
     let JobContext {
         services,
         playback,

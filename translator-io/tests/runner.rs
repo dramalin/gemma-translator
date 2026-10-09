@@ -24,6 +24,18 @@ impl SpeechToText for ScriptedStt {
     }
 }
 
+struct PanickingStt;
+
+impl SpeechToText for PanickingStt {
+    fn transcribe(
+        &self,
+        _samples: &[f32],
+        _language: LanguageCode,
+    ) -> Result<String, PipelineError> {
+        panic!("speech-to-text exploded");
+    }
+}
+
 struct ScriptedTranslator(Vec<&'static str>);
 
 impl Translator for ScriptedTranslator {
@@ -287,6 +299,23 @@ fn transcription_errors_are_reported() {
         [JobEvent::Failed {
             job: JobId(1),
             message: error.to_string()
+        }]
+    );
+}
+
+#[test]
+fn a_panicking_service_fails_the_job() {
+    let (runner, _sink, receiver) = runner(
+        PanickingStt,
+        ScriptedTranslator(vec![]),
+        ScriptedTts(Ok(clip())),
+    );
+    runner.start(request(1, true), Vec::new());
+    assert_eq!(
+        events(&receiver),
+        [JobEvent::Failed {
+            job: JobId(1),
+            message: "job thread panicked".to_string()
         }]
     );
 }
