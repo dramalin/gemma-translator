@@ -31,14 +31,17 @@ run:
 
 ## run-native: run the UI with in-process inference (config: inference_backend = "native", model_dir = "<repo>/models")
 .PHONY: run-native
-run-native:
+run-native: native-libs
 	$(CARGO) build -p translator-ui
-	ln -sfn $(NATIVE_LIB_DIR) target/debug/lib
-	./target/debug/translator
+	target_dir=$$($(CARGO) metadata --format-version 1 --no-deps \
+		| sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p'); \
+	ln -sfn $(NATIVE_LIB_DIR) "$$target_dir/debug/lib" && "$$target_dir/debug/translator"
 
-## native-libs: download libmoonshine / liblitert-lm for this machine into native/<arch>/lib
+## native-libs: download libmoonshine / liblitert-lm into native/<arch>/lib (skipped when present; make -B native-libs refetches)
 .PHONY: native-libs
-native-libs:
+native-libs: $(NATIVE_LIB_DIR)/liblitert-lm.so
+
+$(NATIVE_LIB_DIR)/liblitert-lm.so:
 	scripts/fetch-native-libs.sh $(NATIVE_ARCH)
 
 MODEL_DIR ?= $(CURDIR)/models
