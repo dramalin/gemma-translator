@@ -1,4 +1,5 @@
 use std::ffi::{CStr, CString};
+use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 use std::ptr;
@@ -30,7 +31,7 @@ pub enum MoonshineError {
 }
 
 /// The loaded library and every function this crate calls. Function pointers
-/// stay valid while `_library` is alive, which is as long as `self`.
+/// stay valid for the rest of the process: `_library` is never closed.
 pub struct MoonshineLibrary {
     get_version: ffi::GetVersionFn,
     error_to_string: ffi::ErrorToStringFn,
@@ -41,7 +42,12 @@ pub struct MoonshineLibrary {
     pub(crate) free_tts_synthesizer: ffi::FreeTtsSynthesizerFn,
     get_tts_dependencies: ffi::GetTtsDependenciesFn,
     pub(crate) text_to_speech: ffi::TextToSpeechFn,
-    _library: libloading::Library,
+    /// Never closed: onnxruntime and libstdc++ register thread-local
+    /// destructors that run when a thread that called into the library
+    /// exits, possibly after the last `Arc` is dropped. Unmapping the code
+    /// first crashes that thread (seen under gdb with litert-lm, which
+    /// keeps its library open for the same reason).
+    _library: ManuallyDrop<libloading::Library>,
 }
 
 /// Looks up `name` (NUL-terminated) and copies out the function pointer.
@@ -89,7 +95,7 @@ impl MoonshineLibrary {
                 free_tts_synthesizer: symbol(&library, b"moonshine_free_tts_synthesizer\0")?,
                 get_tts_dependencies: symbol(&library, b"moonshine_get_tts_dependencies\0")?,
                 text_to_speech: symbol(&library, b"moonshine_text_to_speech\0")?,
-                _library: library,
+                _library: ManuallyDrop::new(library),
             }))
         }
     }
