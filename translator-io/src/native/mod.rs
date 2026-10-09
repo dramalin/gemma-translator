@@ -4,6 +4,7 @@
 
 pub mod lru;
 pub mod speech;
+pub mod translator;
 
 use std::fmt::Display;
 use std::path::PathBuf;

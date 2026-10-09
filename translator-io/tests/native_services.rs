@@ -1,10 +1,12 @@
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 
 use translator_core::language::LanguageCode;
 use translator_core::models::ModelPaths;
-use translator_core::pipeline::{SpeechToText, TextToSpeech, STT_SAMPLE_RATE};
+use translator_core::pipeline::{SpeechToText, TextToSpeech, Translator, STT_SAMPLE_RATE};
 use translator_io::audio_convert::resample_linear;
 use translator_io::native::speech::NativeSpeech;
+use translator_io::native::translator::NativeTranslator;
 
 fn env_dir(name: &str) -> PathBuf {
     PathBuf::from(
@@ -49,4 +51,31 @@ fn missing_model_names_the_tool() {
     assert!(error.to_string().contains("tiny-ko"), "{error}");
     let error = speech.synthesize("hola", LanguageCode::Es).unwrap_err();
     assert!(error.to_string().contains("translator-models"), "{error}");
+}
+
+#[test]
+#[ignore = "needs native libraries and models: make test-ffi"]
+fn translates_english_to_chinese_sentence_by_sentence() {
+    let translator = NativeTranslator::spawn(
+        env_dir("TRANSLATOR_NATIVE_LIB_DIR"),
+        ModelPaths::new(env_dir("TRANSLATOR_MODEL_DIR")),
+    );
+    let mut sentences = Vec::new();
+    translator
+        .translate_streaming(
+            "Good morning. How are you today?",
+            LanguageCode::En,
+            LanguageCode::Zh,
+            &AtomicBool::new(false),
+            &mut |sentence| sentences.push(sentence),
+        )
+        .unwrap();
+    assert!(!sentences.is_empty());
+    assert!(
+        sentences
+            .concat()
+            .chars()
+            .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
+        "{sentences:?}"
+    );
 }
