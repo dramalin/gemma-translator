@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["translator-core", "translator-io", "translator-ui"]
+members = ["moonshine-sys", "translator-core", "translator-io", "translator-ui"]
 
 [workspace.package]
 edition = "2021"
