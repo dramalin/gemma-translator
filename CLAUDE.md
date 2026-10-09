@@ -23,6 +23,9 @@ Offline, on-device voice translator (target: Raspberry Pi 5 8GB with a 480x320 k
 
 cd frontend
 npm run dev | npm run build | npm run format   # format uses oxfmt
+make test               # Rust workspace tests + backend/test_*.py
+make run-mock           # Rust/Slint UI with mock services
+cargo test -p translator-core controller   # one crate, tests matching "controller"
 ```
 
 There is no test suite or linter beyond `oxfmt`. `start.sh` kills anything on ports 9379/3000/5173 when not under systemd (`$INVOCATION_ID` unset). In prod, a stale `frontend/dist/` is NOT rebuilt automatically — run `npm run build` after frontend changes.
@@ -45,3 +48,10 @@ Frontend:
 - Input is keyboard-only (no touch controls). Two keyboard modes, `landscape` (default; Space switches active lane, Z records, ←/→ rotate language) and `vertical` (Z/X record per lane, ←/→ and −/+ per lane), persisted in `localStorage` key `keyboardMode`. Shortcuts are ignored while focus is in input/textarea/select, and language rotation is blocked during recording. See README for full tables.
 - Settings (endpoint, proxy toggle, API key, model, keyboard mode) live in `components/SettingsOverlay.jsx`.
 - Styling is a retro-terminal theme in `frontend/style.css`, sized for 480x320.
+
+## Rust UI (phase A of docs/superpowers/specs/2026-10-09-rust-frontend-design.md)
+
+- `translator-core`: pure logic (languages, key mapping, sentence splitting, config, the `Controller` state machine). It must not depend on cpal, ureq or slint. The controller returns `Effect`s instead of doing I/O; `translator-ui/src/app.rs` executes them.
+- `translator-io`: cpal audio, HTTP clients (`/v2/stt`, `/v2/tts` on :3000, streaming chat completions on :9379), volume commands, and `JobRunner`, which pipelines STT → streaming translation → per-sentence TTS on background threads and reports `JobEvent`s.
+- `translator-ui`: Slint binary `translator`; `--mock` swaps in fake services. Job events reach the UI thread through an mpsc channel drained by a 30 ms timer.
+- Python `/v2` endpoints take and return raw 16-bit PCM (`backend/pcm.py`); the old `/api/*` endpoints still serve the React UI.

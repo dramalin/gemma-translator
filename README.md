@@ -73,6 +73,21 @@ To deploy as a permanent systemd kiosk service on a Raspberry Pi 5 (8GB):
 ```
 This automated script installs Debian audio/venv packages, sets up the Python environment, builds production UI assets, downloads the LiteRT model, registers the systemd unit from `deploy/gemma-translator.service`, and configures LXDE GUI autostart (`~/.config/lxsession/rpd-x/autostart`) to launch Chromium in kiosk mode pointing to `http://localhost:3000`.
 
+## Rust UI (experimental)
+
+A native Rust + [Slint](https://slint.dev) replacement for the Chromium kiosk UI lives in the Cargo workspace at the repo root (`translator-core`, `translator-io`, `translator-ui`). It records and plays audio itself and calls the Python service's `/v2/stt` and `/v2/tts` endpoints and `litert-lm serve` directly. See `docs/superpowers/specs/2026-10-09-rust-frontend-design.md`.
+
+Building needs Rust (stable) and the ALSA and fontconfig development headers (`sudo apt install libasound2-dev libfontconfig1-dev` on Debian/Raspberry Pi OS).
+
+```bash
+make test       # Rust + Python unit tests
+make run-mock   # desktop UI with mock speech/translation (no models needed)
+make run        # desktop UI against backend/server.py and litert-lm
+make build-pi   # release build for the Pi (KMS backend, aarch64)
+```
+
+Settings are stored in `~/.config/gemma-translator/config.toml`. In the Rust UI, `Esc` opens the settings page (↑/↓ select, ←/→ change); all other keys match the tables above. Recordings shorter than 300 ms are ignored.
+
 ## Project Structure
 
 - `frontend/` - React (Vite) web frontend (`index.html`, `src/`, styles, and Vite configuration).
