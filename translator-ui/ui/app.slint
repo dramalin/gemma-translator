@@ -1,0 +1,254 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// 480x320 retro-terminal layout: two language lanes, a level visualizer,
+// the transcript panel and a status line, with a settings overlay on top.
+// All state lives in Rust; this file only renders it and forwards keys.
+
+export struct LaneView {
+    label: string,
+    language: string,
+    is-active: bool,
+    is-recording: bool,
+}
+
+export struct SettingsRow {
+    label: string,
+    value: string,
+    is-selected: bool,
+}
+
+component Brackets inherits Rectangle {
+    in property <color> line-color;
+    width: 100%;
+    height: 100%;
+    Rectangle { x: 0; y: 0; width: 14px; height: 2px; background: root.line-color; }
+    Rectangle { x: 0; y: 0; width: 2px; height: 14px; background: root.line-color; }
+    Rectangle { x: root.width - 14px; y: 0; width: 14px; height: 2px; background: root.line-color; }
+    Rectangle { x: root.width - 2px; y: 0; width: 2px; height: 14px; background: root.line-color; }
+    Rectangle { x: 0; y: root.height - 2px; width: 14px; height: 2px; background: root.line-color; }
+    Rectangle { x: 0; y: root.height - 14px; width: 2px; height: 14px; background: root.line-color; }
+    Rectangle { x: root.width - 14px; y: root.height - 2px; width: 14px; height: 2px; background: root.line-color; }
+    Rectangle { x: root.width - 2px; y: root.height - 14px; width: 2px; height: 14px; background: root.line-color; }
+}
+
+component LanePanel inherits Rectangle {
+    in property <LaneView> view;
+    in property <color> theme;
+    in property <bool> show-brackets;
+    property <color> ink: root.view.is-recording ? #000000 : root.theme;
+    background: root.view.is-recording ? root.theme : #000000;
+    border-width: 1px;
+    border-color: root.theme;
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 4px;
+        alignment: center;
+        Text {
+            text: "PERSON " + root.view.label;
+            color: root.ink;
+            font-size: 11px;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.view.language;
+            color: root.ink;
+            font-size: 22px;
+            font-weight: 700;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.view.is-recording ? "● REC" : "◀ ▶";
+            color: root.ink;
+            font-size: 10px;
+            horizontal-alignment: center;
+        }
+    }
+
+    if root.show-brackets && root.view.is-active: Brackets {
+        line-color: root.ink;
+    }
+}
+
+component Visualizer inherits Rectangle {
+    in property <[float]> levels;
+    in property <color> theme;
+    HorizontalLayout {
+        spacing: 1px;
+        for level in root.levels: Rectangle {
+            Rectangle {
+                height: max(1px, parent.height * level);
+                y: parent.height - self.height;
+                background: root.theme;
+            }
+        }
+    }
+}
+
+component TranscriptPanel inherits Rectangle {
+    in property <string> source-label;
+    in property <string> transcription;
+    in property <string> target-label;
+    in property <string> translation;
+    in property <bool> is-translation-right-to-left;
+    in property <color> theme;
+    border-width: 1px;
+    border-color: root.theme;
+
+    VerticalLayout {
+        padding: 6px;
+        spacing: 2px;
+        Text { text: root.source-label; color: root.theme; font-size: 9px; }
+        Text { text: root.transcription; color: #ffffff; font-size: 12px; wrap: word-wrap; }
+        Text { text: root.target-label; color: root.theme; font-size: 9px; }
+        Text {
+            text: root.translation;
+            color: #ffffff;
+            font-size: 14px;
+            wrap: word-wrap;
+            vertical-stretch: 1;
+            vertical-alignment: top;
+            horizontal-alignment: root.is-translation-right-to-left
+                ? TextHorizontalAlignment.right
+                : TextHorizontalAlignment.left;
+        }
+    }
+}
+
+component SettingsOverlay inherits Rectangle {
+    in property <[SettingsRow]> rows;
+    in property <color> theme;
+    background: #000000e6;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 6px;
+        Text { text: "SETTINGS"; color: root.theme; font-size: 14px; font-weight: 700; }
+        for row in root.rows: Rectangle {
+            height: 28px;
+            background: row.is-selected ? root.theme : transparent;
+            HorizontalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                Text {
+                    text: row.label;
+                    color: row.is-selected ? #000000 : root.theme;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    text: "◀ " + row.value + " ▶";
+                    color: row.is-selected ? #000000 : #ffffff;
+                    vertical-alignment: center;
+                }
+            }
+        }
+        Text { text: "↑↓ select   ◀▶ change   Esc close"; color: root.theme; font-size: 9px; }
+    }
+}
+
+export component AppWindow inherits Window {
+    width: 480px;
+    height: 320px;
+    title: "Gemma Translator";
+    background: #000000;
+    default-font-family: "DejaVu Sans Mono";
+
+    in property <color> theme-color: #ffa500;
+    in property <LaneView> lane1;
+    in property <LaneView> lane2;
+    in property <bool> show-active-brackets: true;
+    in property <string> source-label;
+    in property <string> transcription;
+    in property <string> target-label;
+    in property <string> translation;
+    in property <bool> is-translation-right-to-left;
+    in property <string> status-text;
+    in property <[float]> visualizer-levels;
+    in property <bool> is-settings-open;
+    in property <[SettingsRow]> settings-rows;
+
+    // Return true when the key was handled.
+    callback key-pressed(string) -> bool;
+    callback key-released(string) -> bool;
+
+    forward-focus: key-handler;
+
+    key-handler := FocusScope {
+        width: 100%;
+        height: 100%;
+        key-pressed(event) => {
+            // Auto-repeat would toggle lanes or rotate languages repeatedly.
+            if (event.repeat) {
+                return accept;
+            }
+            if (root.key-pressed(event.text)) {
+                return accept;
+            }
+            return reject;
+        }
+        key-released(event) => {
+            if (root.key-released(event.text)) {
+                return accept;
+            }
+            return reject;
+        }
+
+        VerticalLayout {
+            padding: 6px;
+            spacing: 6px;
+            HorizontalLayout {
+                spacing: 6px;
+                height: 110px;
+                LanePanel {
+                    view: root.lane1;
+                    theme: root.theme-color;
+                    show-brackets: root.show-active-brackets;
+                }
+                LanePanel {
+                    view: root.lane2;
+                    theme: root.theme-color;
+                    show-brackets: root.show-active-brackets;
+                }
+            }
+            Visualizer {
+                height: 20px;
+                levels: root.visualizer-levels;
+                theme: root.theme-color;
+            }
+            TranscriptPanel {
+                vertical-stretch: 1;
+                source-label: root.source-label;
+                transcription: root.transcription;
+                target-label: root.target-label;
+                translation: root.translation;
+                is-translation-right-to-left: root.is-translation-right-to-left;
+                theme: root.theme-color;
+            }
+            Text {
+                text: root.status-text;
+                color: root.theme-color;
+                font-size: 10px;
+            }
+        }
+    }
+
+    if root.is-settings-open: SettingsOverlay {
+        width: 100%;
+        height: 100%;
+        rows: root.settings-rows;
+        theme: root.theme-color;
+    }
+}

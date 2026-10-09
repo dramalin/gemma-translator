@@ -1,0 +1,24 @@
+[package]
+name = "translator-ui"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "translator"
+path = "src/main.rs"
+
+[features]
+default = ["desktop"]
+# Desktop development: X11/Wayland window.
+desktop = ["slint/backend-winit", "slint/renderer-femtovg"]
+# Raspberry Pi kiosk: draw straight to the display via KMS, no window system.
+kms = ["slint/backend-linuxkms-noseat", "slint/renderer-femtovg"]
+
+[dependencies]
+translator-core = { path = "../translator-core" }
+translator-io = { path = "../translator-io" }
+slint = { version = "1.17", default-features = false, features = ["compat-1-2", "std"] }
+
+[build-dependencies]
+slint-build = "1.17"
