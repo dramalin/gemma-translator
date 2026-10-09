@@ -1,5 +1,4 @@
-//! Portable logic for the Gemma translator: no audio, network or UI dependencies,
-//! so everything here is unit-testable on any machine.
-
+pub mod keys;
 pub mod lane;
 pub mod language;
+pub mod settings;
