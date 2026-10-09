@@ -109,3 +109,30 @@ fn synthesize_requires_the_sample_rate_header() {
     server.join().unwrap();
     assert!(matches!(error, PipelineError::InvalidResponse { .. }));
 }
+
+#[test]
+fn synthesize_rejects_a_zero_or_unparsable_sample_rate() {
+    for sample_rate in ["0", "fast"] {
+        let response = http_response(
+            "200 OK",
+            &[
+                ("Content-Type", "application/octet-stream"),
+                ("X-Sample-Rate", sample_rate),
+            ],
+            &[0, 0],
+        );
+        let (url, server) = serve_once(response);
+        let error = SpeechServiceClient::new(&url)
+            .synthesize("x", LanguageCode::En)
+            .unwrap_err();
+        server.join().unwrap();
+        assert_eq!(
+            error,
+            PipelineError::InvalidResponse {
+                service: "speech service",
+                message: "invalid X-Sample-Rate header".to_string(),
+            },
+            "X-Sample-Rate: {sample_rate}"
+        );
+    }
+}

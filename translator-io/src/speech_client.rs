@@ -81,10 +81,13 @@ impl TextToSpeech for SpeechServiceClient {
             .set("Content-Type", "application/json")
             .send_string(&body)
             .map_err(request_error)?;
-        let sample_rate: u32 = response
+        let sample_rate = response
             .header("X-Sample-Rate")
-            .and_then(|value| value.parse().ok())
-            .ok_or_else(|| invalid("missing X-Sample-Rate header"))?;
+            .ok_or_else(|| invalid("missing X-Sample-Rate header"))?
+            .parse::<u32>()
+            .ok()
+            .filter(|rate| *rate > 0)
+            .ok_or_else(|| invalid("invalid X-Sample-Rate header"))?;
         let mut bytes = Vec::new();
         response
             .into_reader()
