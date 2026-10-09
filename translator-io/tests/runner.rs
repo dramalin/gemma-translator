@@ -42,8 +42,23 @@ impl Translator for ScriptedTranslator {
     }
 }
 
-/// Signals when it starts, then waits (up to 2 s) for cancellation.
-struct BlockingTranslator(Mutex<Sender<()>>);
+/// Signals when it starts, waits (up to 2 s) for cancellation, then reports
+/// whether it stopped because it was cancelled.
+struct BlockingTranslator {
+    started: Mutex<Sender<()>>,
+    exited: Mutex<Sender<bool>>,
+}
+
+/// The translator plus receivers for its "started" and "exited (was cancelled)" signals.
+fn blocking_translator() -> (BlockingTranslator, Receiver<()>, Receiver<bool>) {
+    let (started_sender, started) = mpsc::channel();
+    let (exited_sender, exited) = mpsc::channel();
+    let translator = BlockingTranslator {
+        started: Mutex::new(started_sender),
+        exited: Mutex::new(exited_sender),
+    };
+    (translator, started, exited)
+}
 
 impl Translator for BlockingTranslator {
     fn translate_streaming(
@@ -54,11 +69,16 @@ impl Translator for BlockingTranslator {
         cancel: &AtomicBool,
         _on_sentence: &mut dyn FnMut(String),
     ) -> Result<(), PipelineError> {
-        self.0.lock().unwrap().send(()).unwrap();
+        self.started.lock().unwrap().send(()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         while !cancel.load(Ordering::SeqCst) && Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5));
         }
+        let _ = self
+            .exited
+            .lock()
+            .unwrap()
+            .send(cancel.load(Ordering::SeqCst));
         Ok(())
     }
 }
@@ -249,15 +269,16 @@ fn speech_errors_are_reported_after_the_translation() {
 
 #[test]
 fn cancelled_job_emits_nothing_more_and_clears_playback() {
-    let (started_sender, started) = mpsc::channel();
+    let (translator, started, exited) = blocking_translator();
     let (runner, sink, receiver) = runner(
         ScriptedStt(Ok("hello".to_string())),
-        BlockingTranslator(Mutex::new(started_sender)),
+        translator,
         ScriptedTts(Ok(clip())),
     );
     runner.start(request(1, true), Vec::new());
     started.recv_timeout(Duration::from_secs(2)).unwrap();
     runner.cancel(JobId(1));
+    assert_eq!(exited.recv_timeout(Duration::from_secs(3)), Ok(true));
     assert_eq!(
         events(&receiver),
         [JobEvent::Transcribed {
@@ -270,17 +291,20 @@ fn cancelled_job_emits_nothing_more_and_clears_playback() {
 
 #[test]
 fn starting_a_new_job_cancels_the_previous_one() {
-    let (started_sender, started) = mpsc::channel();
+    let (translator, started, exited) = blocking_translator();
     let (runner, _sink, receiver) = runner(
         ScriptedStt(Ok("hello".to_string())),
-        BlockingTranslator(Mutex::new(started_sender)),
+        translator,
         ScriptedTts(Ok(clip())),
     );
     runner.start(request(1, true), Vec::new());
     started.recv_timeout(Duration::from_secs(2)).unwrap();
     runner.start(request(2, true), Vec::new());
     started.recv_timeout(Duration::from_secs(2)).unwrap();
+    // Job 2 is still blocked, so this exit report can only come from job 1.
+    assert_eq!(exited.recv_timeout(Duration::from_secs(3)), Ok(true));
     runner.cancel(JobId(2));
+    assert_eq!(exited.recv_timeout(Duration::from_secs(3)), Ok(true));
     let collected = events(&receiver);
     assert!(collected
         .iter()
