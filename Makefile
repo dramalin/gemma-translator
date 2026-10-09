@@ -43,6 +43,18 @@ models: native-libs
 	[ "$(MODEL_DIR)" != "$(CURDIR)/models" ] || printf '*\n' > $(MODEL_DIR)/.gitignore
 	$(CARGO) run --release -p translator-models -- --lib-dir $(NATIVE_LIB_DIR) --model-dir $(MODEL_DIR)
 
+FFI_ENV := TRANSLATOR_NATIVE_LIB_DIR=$(NATIVE_LIB_DIR) TRANSLATOR_MODEL_DIR=$(MODEL_DIR)
+
+## test-ffi: run the tests that need native libraries and models (after make models)
+.PHONY: test-ffi
+test-ffi:
+	$(FFI_ENV) $(CARGO) test --workspace -- --ignored --skip soak --test-threads=1
+
+## test-soak: long-running native memory tests
+.PHONY: test-soak
+test-soak:
+	$(FFI_ENV) $(CARGO) test --release --workspace -- --ignored soak --test-threads=1
+
 ## fmt: format all Rust code
 .PHONY: fmt
 fmt:
