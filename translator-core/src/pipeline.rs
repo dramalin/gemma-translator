@@ -30,6 +30,8 @@ pub enum PipelineError {
         service: &'static str,
         message: String,
     },
+    #[error("{service} did not answer within {seconds} s")]
+    TimedOut { service: &'static str, seconds: u64 },
     #[error("{service} failed: {message}")]
     Engine {
         service: &'static str,

@@ -50,7 +50,7 @@ fn transcribe_reports_service_errors_with_body() {
         PipelineError::Service {
             service: "speech service",
             status: 500,
-            message: r#"{"error":"model missing"}"#.to_string()
+            message: "model missing".to_string()
         }
     );
 }

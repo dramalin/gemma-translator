@@ -3,6 +3,7 @@
 pub mod audio_convert;
 pub mod audio_device;
 pub mod blip;
+mod http_error;
 pub mod llm_client;
 pub mod native;
 pub mod playback_queue;

@@ -7,9 +7,13 @@ use translator_core::language::LanguageCode;
 use translator_core::pipeline::{PipelineError, Translator};
 use translator_core::text::{clean_model_reply, translation_system_prompt, SentenceSplitter};
 
+use crate::http_error::{read_error, request_error};
+
 const SERVICE: &str = "LLM";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
-const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// Per read: a non-streaming reply arrives only once the whole translation is
+/// done, which on the Pi can take well over 30 s.
+const READ_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// OpenAI-compatible chat-completions client (litert-lm serve), streaming via SSE.
 pub struct LlmClient {
@@ -89,20 +93,6 @@ impl LlmClient {
     }
 }
 
-fn request_error(error: ureq::Error) -> PipelineError {
-    match error {
-        ureq::Error::Status(status, response) => PipelineError::Service {
-            service: SERVICE,
-            status,
-            message: response.into_string().unwrap_or_default(),
-        },
-        ureq::Error::Transport(transport) => PipelineError::Unreachable {
-            service: SERVICE,
-            message: transport.to_string(),
-        },
-    }
-}
-
 fn invalid(message: impl ToString) -> PipelineError {
     PipelineError::InvalidResponse {
         service: SERVICE,
@@ -133,7 +123,7 @@ impl Translator for LlmClient {
             .post(&format!("{}/chat/completions", self.endpoint))
             .set("Content-Type", "application/json")
             .send_string(&body)
-            .map_err(request_error)?;
+            .map_err(|error| request_error(SERVICE, READ_TIMEOUT, error))?;
 
         let mut splitter = SentenceSplitter::new();
         let mut emit = |sentences: Vec<String>| {
@@ -167,10 +157,7 @@ impl Translator for LlmClient {
             if cancel.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            let line = line.map_err(|error| PipelineError::Unreachable {
-                service: SERVICE,
-                message: error.to_string(),
-            })?;
+            let line = line.map_err(|error| read_error(SERVICE, READ_TIMEOUT, error))?;
             match parse_sse_line(&line).map_err(invalid)? {
                 SseLine::Delta(fragment) => emit(splitter.push(&fragment)),
                 SseLine::Done => break,

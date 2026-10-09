@@ -6,6 +6,7 @@ use translator_core::language::LanguageCode;
 use translator_core::pipeline::{AudioClip, PipelineError, SpeechToText, TextToSpeech};
 
 use crate::audio_convert::{f32_to_pcm16_le, pcm16_le_to_f32};
+use crate::http_error::request_error;
 
 const SERVICE: &str = "speech service";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -35,20 +36,6 @@ impl SpeechServiceClient {
     }
 }
 
-fn request_error(error: ureq::Error) -> PipelineError {
-    match error {
-        ureq::Error::Status(status, response) => PipelineError::Service {
-            service: SERVICE,
-            status,
-            message: response.into_string().unwrap_or_default(),
-        },
-        ureq::Error::Transport(transport) => PipelineError::Unreachable {
-            service: SERVICE,
-            message: transport.to_string(),
-        },
-    }
-}
-
 fn invalid(message: impl ToString) -> PipelineError {
     PipelineError::InvalidResponse {
         service: SERVICE,
@@ -64,7 +51,7 @@ impl SpeechToText for SpeechServiceClient {
             .post(&url)
             .set("Content-Type", "application/octet-stream")
             .send_bytes(&f32_to_pcm16_le(samples))
-            .map_err(request_error)?;
+            .map_err(|error| request_error(SERVICE, READ_TIMEOUT, error))?;
         let body = response.into_string().map_err(invalid)?;
         let parsed: SttResponse = serde_json::from_str(&body).map_err(invalid)?;
         Ok(parsed.text)
@@ -80,7 +67,7 @@ impl TextToSpeech for SpeechServiceClient {
             .post(&url)
             .set("Content-Type", "application/json")
             .send_string(&body)
-            .map_err(request_error)?;
+            .map_err(|error| request_error(SERVICE, READ_TIMEOUT, error))?;
         let sample_rate = response
             .header("X-Sample-Rate")
             .ok_or_else(|| invalid("missing X-Sample-Rate header"))?
