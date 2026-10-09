@@ -73,6 +73,8 @@ impl JobRunner {
                 cancel.store(true, Ordering::SeqCst);
             }
         }
+        // Must follow the store above: `enqueue_unless_cancelled` relies on the
+        // flag being set before the clear so no clip of this job survives it.
         self.playback.clear();
     }
 }
@@ -126,9 +128,7 @@ fn run_job(context: JobContext, request: JobRequest, samples: Vec<f32>) {
                     break;
                 }
                 let clip = tts.synthesize(&sentence, target)?;
-                if !cancel.load(Ordering::SeqCst) {
-                    playback.enqueue(clip);
-                }
+                playback.enqueue_unless_cancelled(clip, &cancel);
             }
             Ok(())
         })

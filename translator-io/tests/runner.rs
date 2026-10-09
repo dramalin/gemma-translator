@@ -91,15 +91,25 @@ impl TextToSpeech for ScriptedTts {
     }
 }
 
+/// Records speech queued through the cancel-checked path; `unchecked_enqueues`
+/// counts clips queued without that check (the runner must never do that).
 #[derive(Default)]
 struct RecordingSink {
     clips: Mutex<Vec<AudioClip>>,
+    unchecked_enqueues: AtomicUsize,
     clears: AtomicUsize,
 }
 
 impl PlaybackSink for RecordingSink {
-    fn enqueue(&self, clip: AudioClip) {
-        self.clips.lock().unwrap().push(clip);
+    fn enqueue(&self, _clip: AudioClip) {
+        self.unchecked_enqueues.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn enqueue_unless_cancelled(&self, clip: AudioClip, cancel: &AtomicBool) {
+        let mut clips = self.clips.lock().unwrap();
+        if !cancel.load(Ordering::SeqCst) {
+            clips.push(clip);
+        }
     }
 
     fn clear(&self) {
@@ -187,6 +197,7 @@ fn full_job_speaks_every_sentence() {
         ]
     );
     assert_eq!(sink.clips.lock().unwrap().len(), 2);
+    assert_eq!(sink.unchecked_enqueues.load(Ordering::SeqCst), 0);
 }
 
 #[test]

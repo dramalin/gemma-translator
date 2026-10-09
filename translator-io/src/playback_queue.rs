@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use translator_core::pipeline::AudioClip;
@@ -8,6 +9,10 @@ use crate::audio_convert::resample_linear;
 /// Where synthesized speech and UI sounds go.
 pub trait PlaybackSink: Send + Sync {
     fn enqueue(&self, clip: AudioClip);
+    /// Queues `clip` only if `cancel` is still clear, checking the flag under
+    /// the same lock `clear` takes. A canceller that sets the flag *before*
+    /// calling `clear` therefore never finds the clip queued after its clear.
+    fn enqueue_unless_cancelled(&self, clip: AudioClip, cancel: &AtomicBool);
     fn clear(&self);
     fn is_idle(&self) -> bool;
 }
@@ -46,6 +51,14 @@ impl PlaybackSink for PlaybackQueue {
         self.lock().extend(resampled);
     }
 
+    fn enqueue_unless_cancelled(&self, clip: AudioClip, cancel: &AtomicBool) {
+        let resampled = resample_linear(&clip.samples, clip.sample_rate, self.output_rate);
+        let mut samples = self.lock();
+        if !cancel.load(Ordering::SeqCst) {
+            samples.extend(resampled);
+        }
+    }
+
     fn clear(&self) {
         self.lock().clear();
     }
@@ -60,6 +73,8 @@ pub struct DiscardingSink;
 
 impl PlaybackSink for DiscardingSink {
     fn enqueue(&self, _clip: AudioClip) {}
+
+    fn enqueue_unless_cancelled(&self, _clip: AudioClip, _cancel: &AtomicBool) {}
 
     fn clear(&self) {}
 
@@ -118,6 +133,19 @@ mod tests {
             samples: vec![0.5; 4],
             sample_rate: 48_000,
         });
+        assert!(!queue.is_idle());
+    }
+
+    #[test]
+    fn cancelled_clips_are_not_queued() {
+        let queue = PlaybackQueue::new(48_000);
+        let clip = AudioClip {
+            samples: vec![0.5; 10],
+            sample_rate: 48_000,
+        };
+        queue.enqueue_unless_cancelled(clip.clone(), &AtomicBool::new(true));
+        assert!(queue.is_idle());
+        queue.enqueue_unless_cancelled(clip, &AtomicBool::new(false));
         assert!(!queue.is_idle());
     }
 
