@@ -13,6 +13,10 @@ const QUOTE_PAIRS: [(char, char); 5] = [
     ('「', '」'),
     ('『', '』'),
 ];
+/// Quotes whose other half may sit in a different sentence after splitting.
+/// The ASCII apostrophe is left out: a trailing one is usually a possessive.
+const SPANNING_QUOTE_PAIRS: [(char, char); 4] =
+    [('"', '"'), ('“', '”'), ('「', '」'), ('『', '』')];
 const REPLY_LABELS: [&str; 2] = ["translation:", "translated text:"];
 
 pub fn translation_system_prompt(source: LanguageCode, target: LanguageCode) -> String {
@@ -26,6 +30,8 @@ pub fn translation_system_prompt(source: LanguageCode, target: LanguageCode) -> 
 
 /// Removes wrappers a small model tends to add around a translation:
 /// code fences, "Translation:" labels, markdown emphasis and surrounding quotes.
+/// Runs per sentence, so a quote opened in one sentence and closed in a later
+/// one is removed from both.
 pub fn clean_model_reply(reply: &str) -> String {
     let without_fences: Vec<&str> = reply
         .lines()
@@ -44,7 +50,9 @@ pub fn clean_model_reply(reply: &str) -> String {
             text = text[label.len()..].trim().to_string();
         }
     }
-    strip_quote_pair(&text).trim().to_string()
+    strip_unmatched_quotes(strip_quote_pair(&text).trim())
+        .trim()
+        .to_string()
 }
 
 fn strip_quote_pair(text: &str) -> &str {
@@ -54,6 +62,27 @@ fn strip_quote_pair(text: &str) -> &str {
             .and_then(|rest| rest.strip_suffix(close))
         {
             return inner;
+        }
+    }
+    text
+}
+
+/// Drops a quote mark at either end of `text` whose partner is not in `text`.
+fn strip_unmatched_quotes(text: &str) -> &str {
+    let mut text = text;
+    for (open, close) in SPANNING_QUOTE_PAIRS {
+        let is_unmatched = |text: &str, partner: char| {
+            if open == close {
+                text.matches(open).count() % 2 == 1
+            } else {
+                !text.contains(partner)
+            }
+        };
+        if text.starts_with(open) && is_unmatched(text, close) {
+            text = text[open.len_utf8()..].trim_start();
+        }
+        if text.ends_with(close) && is_unmatched(text, open) {
+            text = text[..text.len() - close.len_utf8()].trim_end();
         }
     }
     text
@@ -178,6 +207,30 @@ mod tests {
         assert_eq!(clean_model_reply("# Title"), "Title");
         assert_eq!(clean_model_reply("It's fine."), "It's fine.");
         assert_eq!(clean_model_reply("   "), "");
+    }
+
+    #[test]
+    fn cleaning_drops_quote_halves_left_by_sentence_splitting() {
+        assert_eq!(clean_model_reply("\"Hola."), "Hola.");
+        assert_eq!(clean_model_reply("¿Qué tal?\""), "¿Qué tal?");
+        assert_eq!(clean_model_reply("Translation: \"Hola."), "Hola.");
+        assert_eq!(clean_model_reply("“Hola."), "Hola.");
+        assert_eq!(clean_model_reply("Adiós.”"), "Adiós.");
+        assert_eq!(clean_model_reply("「你好。"), "你好。");
+        assert_eq!(clean_model_reply("再见。」"), "再见。");
+        assert_eq!(clean_model_reply("『はい。"), "はい。");
+    }
+
+    #[test]
+    fn cleaning_keeps_quotes_that_are_matched_inside_the_sentence() {
+        assert_eq!(
+            clean_model_reply("\"Hola\", dijo ella."),
+            "\"Hola\", dijo ella."
+        );
+        assert_eq!(clean_model_reply("Dijo “sí” ayer."), "Dijo “sí” ayer.");
+        assert_eq!(clean_model_reply("他说「好」。"), "他说「好」。");
+        assert_eq!(clean_model_reply("The dogs' toys."), "The dogs' toys.");
+        assert_eq!(clean_model_reply("The dogs'"), "The dogs'");
     }
 
     #[test]

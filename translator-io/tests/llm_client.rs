@@ -52,6 +52,25 @@ fn streams_sentences_from_server_sent_events() {
 }
 
 #[test]
+fn quotes_and_labels_spanning_sentences_are_removed() {
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"Trans\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"lation: \\\"Hola. \"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"¿Qué tal?\\\"\"}}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    let response = http_response(
+        "200 OK",
+        &[("Content-Type", "text/event-stream")],
+        body.as_bytes(),
+    );
+    let (url, server) = serve_once(response);
+    let sentences = translate(&LlmClient::new(&url, "gemma4-e2b"), false).unwrap();
+    server.join().unwrap();
+    assert_eq!(sentences, ["Hola.", "¿Qué tal?"]);
+}
+
+#[test]
 fn falls_back_to_a_regular_completion() {
     let body =
         br#"{"choices":[{"message":{"role":"assistant","content":"Translation: Hola. Adios."}}]}"#;
