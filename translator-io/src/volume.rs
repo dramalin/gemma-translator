@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::os::unix::fs::MetadataExt;
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -114,6 +115,48 @@ impl<R: CommandRunner> VolumeControl<R> {
     }
 }
 
+/// Runs `VolumeControl` on its own thread, because each command may take up to
+/// `COMMAND_TIMEOUT` and the UI thread must not wait. The thread ends when the
+/// worker is dropped.
+pub struct VolumeWorker {
+    adjustments: Sender<RotateDirection>,
+    readings: Receiver<Option<u16>>,
+}
+
+impl VolumeWorker {
+    /// Starts the thread, which first reads the current volume.
+    pub fn spawn<R: CommandRunner + Send + 'static>(runner: R) -> Self {
+        let (adjustments, adjustment_receiver) = mpsc::channel();
+        let (reading_sender, readings) = mpsc::channel();
+        thread::spawn(move || {
+            let control = VolumeControl::new(runner);
+            if reading_sender.send(control.current_percent()).is_err() {
+                return;
+            }
+            for direction in adjustment_receiver {
+                if reading_sender.send(control.adjust(direction)).is_err() {
+                    return;
+                }
+            }
+        });
+        VolumeWorker {
+            adjustments,
+            readings,
+        }
+    }
+
+    /// Queues a 5 % step; the resulting level arrives through `latest_reading`.
+    pub fn adjust(&self, direction: RotateDirection) {
+        let _ = self.adjustments.send(direction);
+    }
+
+    /// The newest reading finished since the last call, if any; the reading
+    /// itself is `None` when the volume is unknown.
+    pub fn latest_reading(&self) -> Option<Option<u16>> {
+        self.readings.try_iter().last()
+    }
+}
+
 /// "Volume: 0.75" → 75
 fn parse_wpctl_volume(output: &str) -> Option<u16> {
     let value = output.split("Volume:").nth(1)?.split_whitespace().next()?;
@@ -138,6 +181,7 @@ fn parse_amixer_volume(output: &str) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::mpsc::{self, Receiver};
     use std::sync::Mutex;
 
     use super::*;
@@ -213,6 +257,64 @@ mod tests {
                 "wpctl get-volume @DEFAULT_AUDIO_SINK@"
             ]
         );
+    }
+
+    /// Blocks every command until `release` is signalled or dropped.
+    struct GatedRunner {
+        inner: FakeRunner,
+        release: Mutex<Receiver<()>>,
+    }
+
+    impl CommandRunner for GatedRunner {
+        fn run(&self, program: &str, args: &[&str]) -> Option<String> {
+            let _ = self
+                .release
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(2));
+            self.inner.run(program, args)
+        }
+    }
+
+    fn wait_for_reading(worker: &VolumeWorker) -> Option<u16> {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some(reading) = worker.latest_reading() {
+                return reading;
+            }
+            assert!(Instant::now() < deadline, "no volume reading arrived");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn worker_reads_at_start_and_after_each_adjustment() {
+        let worker = VolumeWorker::spawn(FakeRunner::with(&[
+            ("wpctl get-volume @DEFAULT_AUDIO_SINK@", "Volume: 0.75"),
+            ("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+", ""),
+        ]));
+        assert_eq!(wait_for_reading(&worker), Some(75));
+        worker.adjust(RotateDirection::Next);
+        assert_eq!(wait_for_reading(&worker), Some(75));
+        assert_eq!(worker.latest_reading(), None);
+    }
+
+    #[test]
+    fn worker_requests_do_not_wait_for_the_commands() {
+        let (release, release_receiver) = mpsc::channel();
+        let started_at = Instant::now();
+        let worker = VolumeWorker::spawn(GatedRunner {
+            inner: FakeRunner::with(&[
+                ("wpctl get-volume @DEFAULT_AUDIO_SINK@", "Volume: 0.40"),
+                ("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-", ""),
+            ]),
+            release: Mutex::new(release_receiver),
+        });
+        worker.adjust(RotateDirection::Previous);
+        assert!(started_at.elapsed() < Duration::from_millis(500));
+        assert_eq!(worker.latest_reading(), None);
+        drop(release);
+        assert_eq!(wait_for_reading(&worker), Some(40));
     }
 
     #[test]

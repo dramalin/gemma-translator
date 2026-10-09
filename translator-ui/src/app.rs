@@ -20,7 +20,7 @@ use translator_io::llm_client::LlmClient;
 use translator_io::playback_queue::{DiscardingSink, PlaybackSink};
 use translator_io::runner::{JobRunner, Services};
 use translator_io::speech_client::SpeechServiceClient;
-use translator_io::volume::{SystemCommandRunner, VolumeControl};
+use translator_io::volume::{SystemCommandRunner, VolumeWorker};
 
 use crate::view::{lane_view, settings_rows, status_line, theme_color, update_levels};
 use crate::{mock, AppWindow, SettingsRow};
@@ -75,7 +75,7 @@ pub struct AppState {
     _player: Option<AudioPlayer>,
     runner: JobRunner,
     job_events: Receiver<JobEvent>,
-    volume: VolumeControl<SystemCommandRunner>,
+    volume: VolumeWorker,
     volume_percent: Option<u16>,
     config_path: Option<PathBuf>,
     pending_samples: Option<Vec<f32>>,
@@ -122,8 +122,7 @@ impl AppState {
                 let _ = sender.send(event);
             }),
         );
-        let volume = VolumeControl::new(SystemCommandRunner);
-        let volume_percent = volume.current_percent();
+        let volume = VolumeWorker::spawn(SystemCommandRunner);
         AppState {
             controller: Controller::new(config),
             settings_cursor: SettingsCursor::default(),
@@ -133,7 +132,7 @@ impl AppState {
             runner,
             job_events,
             volume,
-            volume_percent,
+            volume_percent: None,
             config_path,
             pending_samples: None,
             levels: Vec::new(),
@@ -182,11 +181,14 @@ impl AppState {
         true
     }
 
-    /// Per-frame work: deliver job events and advance the visualizer.
+    /// Per-frame work: deliver job events and volume readings, and advance the visualizer.
     pub fn tick(&mut self) {
         while let Ok(event) = self.job_events.try_recv() {
             let effects = self.controller.on_job_event(event);
             self.execute(effects);
+        }
+        if let Some(percent) = self.volume.latest_reading() {
+            self.volume_percent = percent;
         }
         let bar_count = self.controller.config().visualizer_bars as usize;
         let level = matches!(self.controller.phase(), Phase::Recording(_))
@@ -236,9 +238,7 @@ impl AppState {
                     let samples = self.pending_samples.take().unwrap_or_default();
                     self.runner.start(request, samples);
                 }
-                Effect::AdjustVolume(direction) => {
-                    self.volume_percent = self.volume.adjust(direction)
-                }
+                Effect::AdjustVolume(direction) => self.volume.adjust(direction),
                 Effect::SaveConfig => self.save_config(),
             }
         }
