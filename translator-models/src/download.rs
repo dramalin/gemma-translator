@@ -51,7 +51,13 @@ pub fn agent() -> ureq::Agent {
         .build()
 }
 
-pub fn ensure_file(agent: &ureq::Agent, spec: &FileSpec) -> Result<DownloadOutcome, DownloadError> {
+/// `on_progress(received, total)` runs after every chunk; `total` comes from
+/// Content-Length when the server sends one.
+pub fn ensure_file(
+    agent: &ureq::Agent,
+    spec: &FileSpec,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<DownloadOutcome, DownloadError> {
     if spec.destination.is_file() {
         return Ok(DownloadOutcome::AlreadyPresent);
     }
@@ -61,7 +67,7 @@ pub fn ensure_file(agent: &ureq::Agent, spec: &FileSpec) -> Result<DownloadOutco
         .expect("model files always live inside the model directory");
     fs::create_dir_all(parent).map_err(io_error(parent))?;
     let partial = partial_path(&spec.destination);
-    match download_to(agent, spec, &partial) {
+    match download_to(agent, spec, &partial, on_progress) {
         Ok(bytes) => {
             fs::rename(&partial, &spec.destination).map_err(io_error(&spec.destination))?;
             Ok(DownloadOutcome::Downloaded { bytes })
@@ -73,7 +79,12 @@ pub fn ensure_file(agent: &ureq::Agent, spec: &FileSpec) -> Result<DownloadOutco
     }
 }
 
-fn download_to(agent: &ureq::Agent, spec: &FileSpec, partial: &Path) -> Result<u64, DownloadError> {
+fn download_to(
+    agent: &ureq::Agent,
+    spec: &FileSpec,
+    partial: &Path,
+    on_progress: &mut dyn FnMut(u64, Option<u64>),
+) -> Result<u64, DownloadError> {
     let url = &spec.url;
     let response = agent.get(url).call().map_err(|error| match error {
         ureq::Error::Status(status, _) => DownloadError::Status {
@@ -109,6 +120,7 @@ fn download_to(agent: &ureq::Agent, spec: &FileSpec, partial: &Path) -> Result<u
         hasher.update(&buffer[..read]);
         file.write_all(&buffer[..read]).map_err(io_error(partial))?;
         received += read as u64;
+        on_progress(received, expected_length);
     }
     file.sync_all().map_err(io_error(partial))?;
 
@@ -188,6 +200,10 @@ mod tests {
         }
     }
 
+    fn fetch(spec: &FileSpec) -> Result<DownloadOutcome, DownloadError> {
+        ensure_file(&agent(), spec, &mut |_, _| {})
+    }
+
     // sha256("hello")
     const HELLO_SHA256: &str = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
 
@@ -196,11 +212,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let destination = dir.path().join("a").join("b").join("file.bin");
         let url = serve_once(ok_response(5, b"hello"));
-        let outcome = ensure_file(
-            &agent(),
-            &spec(url, destination.clone(), Some(HELLO_SHA256)),
-        )
-        .unwrap();
+        let outcome = fetch(&spec(url, destination.clone(), Some(HELLO_SHA256))).unwrap();
         assert_eq!(outcome, DownloadOutcome::Downloaded { bytes: 5 });
         assert_eq!(std::fs::read(&destination).unwrap(), b"hello");
         assert!(!partial_path(&destination).exists());
@@ -213,7 +225,7 @@ mod tests {
         std::fs::write(&destination, b"old").unwrap();
         // Port 9 (discard) is closed: any request would fail.
         let url = "http://127.0.0.1:9/file.bin".to_string();
-        let outcome = ensure_file(&agent(), &spec(url, destination.clone(), None)).unwrap();
+        let outcome = fetch(&spec(url, destination.clone(), None)).unwrap();
         assert_eq!(outcome, DownloadOutcome::AlreadyPresent);
         assert_eq!(std::fs::read(&destination).unwrap(), b"old");
     }
@@ -223,7 +235,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let destination = dir.path().join("file.bin");
         let url = serve_once(ok_response(10, b"hell"));
-        assert!(ensure_file(&agent(), &spec(url, destination.clone(), None)).is_err());
+        assert!(fetch(&spec(url, destination.clone(), None)).is_err());
         assert!(!destination.exists());
         assert!(!partial_path(&destination).exists());
     }
@@ -233,11 +245,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let destination = dir.path().join("file.bin");
         let url = serve_once(ok_response(5, b"jello"));
-        let error = ensure_file(
-            &agent(),
-            &spec(url, destination.clone(), Some(HELLO_SHA256)),
-        )
-        .unwrap_err();
+        let error = fetch(&spec(url, destination.clone(), Some(HELLO_SHA256))).unwrap_err();
         assert!(
             matches!(error, DownloadError::HashMismatch { .. }),
             "{error}"
@@ -253,11 +261,26 @@ mod tests {
         let url = serve_once(
             b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
         );
-        let error = ensure_file(&agent(), &spec(url, destination.clone(), None)).unwrap_err();
+        let error = fetch(&spec(url, destination.clone(), None)).unwrap_err();
         assert!(
             matches!(error, DownloadError::Status { status: 404, .. }),
             "{error}"
         );
         assert!(!destination.exists());
+        assert!(!partial_path(&destination).exists());
+    }
+
+    #[test]
+    fn progress_reports_bytes_received_and_the_total() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = serve_once(ok_response(5, b"hello"));
+        let mut reports = Vec::new();
+        ensure_file(
+            &agent(),
+            &spec(url, dir.path().join("file.bin"), None),
+            &mut |received, total| reports.push((received, total)),
+        )
+        .unwrap();
+        assert_eq!(reports.last(), Some(&(5, Some(5))));
     }
 }

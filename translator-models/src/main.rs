@@ -15,6 +15,8 @@ use translator_core::models::ModelPaths;
 use crate::download::{ensure_file, DownloadOutcome};
 
 const USAGE: &str = "usage: translator-models --model-dir <dir> [--lib-dir <dir>]";
+/// Files at least this large get progress lines while they download.
+const PROGRESS_MIN_BYTES: u64 = 64 << 20;
 
 #[derive(Debug, PartialEq)]
 struct Options {
@@ -79,10 +81,25 @@ fn run(options: &Options) -> Result<(), String> {
     files.extend(catalog::stt_files(&paths));
     files.extend(catalog::tts_files(&paths, &tts_keys));
 
+    // litert-lm writes its compiled-model cache here at run time; create it
+    // now, while the deploying user can still write to the model directory.
+    let cache_dir = paths.llm_cache_dir();
+    std::fs::create_dir_all(&cache_dir)
+        .map_err(|error| format!("{}: {error}", cache_dir.display()))?;
+
     let agent = download::agent();
     let mut failures = 0;
     for spec in &files {
-        match ensure_file(&agent, spec) {
+        let mut last_tenth = 0;
+        let mut on_progress = |received: u64, total: Option<u64>| {
+            if let Some(tenth) = progress_tenth(received, total) {
+                if tenth > last_tenth {
+                    last_tenth = tenth;
+                    println!("  {}% of {}", tenth * 10, spec.destination.display());
+                }
+            }
+        };
+        match ensure_file(&agent, spec, &mut on_progress) {
             Ok(DownloadOutcome::AlreadyPresent) => {
                 println!("present  {}", spec.destination.display())
             }
@@ -107,6 +124,13 @@ fn run(options: &Options) -> Result<(), String> {
         paths.root().display()
     );
     Ok(())
+}
+
+/// Completed tenths (1..=10) of a large download, or `None` for small or
+/// unknown-size files.
+fn progress_tenth(received: u64, total: Option<u64>) -> Option<u64> {
+    let total = total.filter(|total| *total >= PROGRESS_MIN_BYTES)?;
+    Some(received.min(total) * 10 / total)
 }
 
 fn collect_tts_keys(
@@ -156,6 +180,15 @@ mod tests {
                 lib_dir: PathBuf::from("/l"),
             })
         );
+    }
+
+    #[test]
+    fn progress_is_reported_in_tenths_for_large_files_only() {
+        let total = Some(PROGRESS_MIN_BYTES * 10);
+        assert_eq!(progress_tenth(PROGRESS_MIN_BYTES * 3 + 1, total), Some(3));
+        assert_eq!(progress_tenth(PROGRESS_MIN_BYTES * 10, total), Some(10));
+        assert_eq!(progress_tenth(100, Some(1000)), None);
+        assert_eq!(progress_tenth(PROGRESS_MIN_BYTES * 3, None), None);
     }
 
     #[test]
