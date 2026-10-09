@@ -1,5 +1,5 @@
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -190,9 +190,10 @@ impl Config {
         Ok(config.normalized())
     }
 
-    /// Writes atomically (temp file + rename) so a power cut never leaves half a file.
+    /// Writes atomically (temp file + fsync + rename) so a power cut never
+    /// leaves half a file. Values are normalized as `load` would.
     pub fn save(&self, path: &Path) -> Result<(), ConfigError> {
-        let text = toml::to_string_pretty(self)?;
+        let text = toml::to_string_pretty(&self.clone().normalized())?;
         let write_error = |source| ConfigError::Write {
             path: path.to_path_buf(),
             source,
@@ -201,7 +202,9 @@ impl Config {
             fs::create_dir_all(parent).map_err(write_error)?;
         }
         let temp_path = path.with_extension("toml.tmp");
-        fs::write(&temp_path, text).map_err(write_error)?;
+        let mut file = fs::File::create(&temp_path).map_err(write_error)?;
+        file.write_all(text.as_bytes()).map_err(write_error)?;
+        file.sync_all().map_err(write_error)?;
         fs::rename(&temp_path, path).map_err(write_error)
     }
 
@@ -224,6 +227,23 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_writes_normalized_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = Config {
+            visualizer_bars: 3,
+            lane1_language: LanguageCode::Zh,
+            lane2_language: LanguageCode::Zh,
+            ..Config::default()
+        };
+        config.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("visualizer_bars = 8"), "{text}");
+        assert!(text.contains("lane2_language = \"ko\""), "{text}");
+        assert!(!dir.path().join("config.toml.tmp").exists());
+    }
 
     #[test]
     fn missing_file_gives_defaults() {
@@ -330,7 +350,7 @@ mod tests {
         assert_eq!(defaults.inference_backend, InferenceBackend::Http);
         assert_eq!(
             defaults.model_dir,
-            std::path::PathBuf::from("/var/lib/gemma-translator/models")
+            PathBuf::from("/var/lib/gemma-translator/models")
         );
 
         std::fs::write(
@@ -340,9 +360,6 @@ mod tests {
         .unwrap();
         let config = Config::load(&path).unwrap();
         assert_eq!(config.inference_backend, InferenceBackend::Native);
-        assert_eq!(
-            config.model_dir,
-            std::path::PathBuf::from("/home/pi/models")
-        );
+        assert_eq!(config.model_dir, PathBuf::from("/home/pi/models"));
     }
 }
