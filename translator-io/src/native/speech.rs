@@ -167,31 +167,37 @@ impl SpeechEngines {
         let model = language.stt_model();
         let directory = self.paths.stt_dir(model);
         let library = &self.library;
-        self.transcribers.get_or_try_insert_with(language, || {
-            require_files(&directory, model.components)?;
-            Transcriber::load(library, &directory, model_arch(model.arch))
-                .map_err(|error| engine_error(SERVICE, error))
-        })
+        self.transcribers.get_or_try_insert_with(
+            language,
+            || require_files(&directory, model.components),
+            || {
+                Transcriber::load(library, &directory, model_arch(model.arch))
+                    .map_err(|error| engine_error(SERVICE, error))
+            },
+        )
     }
 
     fn synthesizer(&mut self, language: LanguageCode) -> Result<&mut Synthesizer, PipelineError> {
         let root = self.paths.tts_root();
         let library = &self.library;
-        self.synthesizers.get_or_try_insert_with(language, || {
-            require_directory(&root)?;
-            let root_text = root
-                .to_str()
-                .ok_or_else(|| engine_error(SERVICE, format!("{} is not UTF-8", root.display())))?;
-            let voice = language.tts_voice();
-            Synthesizer::create(
-                library,
-                voice.language_tag,
-                &voice.synthesizer_options(root_text),
-            )
-            // The C side resolves the voice's files, so a partial download
-            // surfaces only as this failure.
-            .map_err(|error| engine_error(SERVICE, format!("{error}; run translator-models")))
-        })
+        self.synthesizers.get_or_try_insert_with(
+            language,
+            || require_directory(&root),
+            || {
+                let root_text = root.to_str().ok_or_else(|| {
+                    engine_error(SERVICE, format!("{} is not UTF-8", root.display()))
+                })?;
+                let voice = language.tts_voice();
+                Synthesizer::create(
+                    library,
+                    voice.language_tag,
+                    &voice.synthesizer_options(root_text),
+                )
+                // The C side resolves the voice's files, so a partial download
+                // surfaces only as this failure.
+                .map_err(|error| engine_error(SERVICE, format!("{error}; run translator-models")))
+            },
+        )
     }
 }
 
