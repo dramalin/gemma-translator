@@ -25,6 +25,10 @@ cd frontend
 npm run dev | npm run build | npm run format   # format uses oxfmt
 make test               # Rust workspace tests + backend/test_*.py
 make run-mock           # Rust/Slint UI with mock services
+make native-libs        # fetch pinned libmoonshine / liblitert-lm into native/<arch>/lib
+make models             # download all models into MODEL_DIR (default ./models)
+make test-ffi           # #[ignore]d tests that need native libs + models
+make run-native         # Rust UI with in-process inference (inference_backend = "native")
 cargo test -p translator-core controller   # one crate, tests matching "controller"
 ```
 
@@ -55,3 +59,6 @@ Frontend:
 - `translator-io`: cpal audio, HTTP clients (`/v2/stt`, `/v2/tts` on :3000, streaming chat completions on :9379), volume commands, and `JobRunner`, which pipelines STT → streaming translation → per-sentence TTS on background threads and reports `JobEvent`s.
 - `translator-ui`: Slint binary `translator`; `--mock` swaps in fake services. Job events reach the UI thread through an mpsc channel drained by a 30 ms timer.
 - Python `/v2` endpoints take and return raw 16-bit PCM (`backend/pcm.py`); the old `/api/*` endpoints still serve the React UI.
+- `moonshine-sys` / `litert-lm-sys`: run-time (`libloading`) bindings to the vendor libraries from the pinned wheels; signatures are copied from the wheels' ctypes code, so re-check them on any version bump. Handles are `!Send` and live on one worker thread each (`translator-io/src/native/`).
+- `translator-models`: downloads Gemma, the Moonshine STT models and TTS assets into `model_dir` (layout in `translator-core/src/models.rs`).
+- `inference_backend = "native"` in the config switches the UI from the HTTP services to the native ones. Native tests are `#[ignore]`d: `make native-libs models test-ffi`.

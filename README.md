@@ -88,6 +88,28 @@ make build-pi   # release build for the Pi (KMS backend, aarch64)
 
 Settings are stored in `~/.config/gemma-translator/config.toml`. In the Rust UI, `Esc` opens the settings page (↑/↓ select, ←/→ change); all other keys match the tables above. Recordings shorter than 300 ms are ignored.
 
+### In-process inference (phase B, experimental)
+
+The `translator` binary can run speech recognition, translation and speech
+synthesis itself, without `server.py` or `litert-lm serve`:
+
+```bash
+sudo apt-get install -y patchelf unzip libvulkan1
+make native-libs     # pinned libmoonshine / liblitert-lm into native/<arch>/lib
+make models          # ~3.5 GB of models into ./models (MODEL_DIR=... to change)
+make test-ffi        # FFI tests against those libraries and models
+```
+
+Then set in `~/.config/gemma-translator/config.toml`:
+
+```toml
+inference_backend = "native"
+model_dir = "/path/to/models"
+```
+
+and start it with `make run-native`. The libraries are loaded from `lib/`
+next to the executable. `make test-soak` runs the long memory test.
+
 ## Project Structure
 
 - `frontend/` - React (Vite) web frontend (`index.html`, `src/`, styles, and Vite configuration).

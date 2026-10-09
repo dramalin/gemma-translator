@@ -8,15 +8,17 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use slint::{ModelRc, VecModel};
-use translator_core::config::Config;
+use translator_core::config::{Config, InferenceBackend};
 use translator_core::controller::{Controller, Effect, JobEvent, Phase};
 use translator_core::keys::{command_for_key_press, command_for_key_release, Key, KeyboardMode};
 use translator_core::lane::Lane;
+use translator_core::models::ModelPaths;
 use translator_core::pipeline::STT_SAMPLE_RATE;
 use translator_core::settings::SettingsCursor;
 use translator_io::audio_device::{AudioPlayer, AudioRecorder, CapturedAudio};
 use translator_io::blip::{synthesize_blip, BLIP_SAMPLE_RATE};
 use translator_io::llm_client::LlmClient;
+use translator_io::native::{self, speech::NativeSpeech, translator::NativeTranslator};
 use translator_io::playback_queue::{DiscardingSink, PlaybackSink};
 use translator_io::runner::{JobRunner, Services};
 use translator_io::speech_client::SpeechServiceClient;
@@ -107,11 +109,19 @@ impl AppState {
         let services = if is_mock {
             mock::services()
         } else {
-            let speech = Arc::new(SpeechServiceClient::new(&config.speech_service_url));
-            Services {
-                stt: speech.clone(),
-                translator: Arc::new(LlmClient::new(&config.llm_endpoint, &config.llm_model)),
-                tts: speech,
+            match config.inference_backend {
+                InferenceBackend::Http => {
+                    let speech = Arc::new(SpeechServiceClient::new(&config.speech_service_url));
+                    Services {
+                        stt: speech.clone(),
+                        translator: Arc::new(LlmClient::new(
+                            &config.llm_endpoint,
+                            &config.llm_model,
+                        )),
+                        tts: speech,
+                    }
+                }
+                InferenceBackend::Native => native_services(&config),
             }
         };
         let (sender, job_events) = mpsc::channel();
@@ -251,5 +261,22 @@ impl AppState {
         if let Err(error) = self.controller.config().save(path) {
             eprintln!("[config] {error}");
         }
+    }
+}
+
+/// In-process inference: one speech thread (preloading both lanes' languages)
+/// and one model thread, both loading their libraries from `<exe dir>/lib`.
+fn native_services(config: &Config) -> Services {
+    let lib_dir = native::default_lib_dir();
+    let paths = ModelPaths::new(&config.model_dir);
+    let speech = Arc::new(NativeSpeech::spawn(
+        lib_dir.clone(),
+        paths.clone(),
+        vec![config.lane1_language, config.lane2_language],
+    ));
+    Services {
+        stt: speech.clone(),
+        translator: Arc::new(NativeTranslator::spawn(lib_dir, paths)),
+        tts: speech,
     }
 }

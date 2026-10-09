@@ -29,6 +29,13 @@ run-mock:
 run:
 	$(CARGO) run -p translator-ui
 
+## run-native: run the UI with in-process inference (config: inference_backend = "native", model_dir = "<repo>/models")
+.PHONY: run-native
+run-native:
+	$(CARGO) build -p translator-ui
+	ln -sfn $(NATIVE_LIB_DIR) target/debug/lib
+	./target/debug/translator
+
 ## native-libs: download libmoonshine / liblitert-lm for this machine into native/<arch>/lib
 .PHONY: native-libs
 native-libs:
