@@ -1,0 +1,15 @@
+[package]
+name = "translator-models"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+translator-core = { path = "../translator-core" }
+moonshine-sys = { path = "../moonshine-sys" }
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+sha2 = "0.10"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

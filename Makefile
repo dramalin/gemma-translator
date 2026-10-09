@@ -34,6 +34,15 @@ run:
 native-libs:
 	scripts/fetch-native-libs.sh $(NATIVE_ARCH)
 
+MODEL_DIR ?= $(CURDIR)/models
+
+## models: download every model into MODEL_DIR (default ./models, ~3.5 GB)
+.PHONY: models
+models: native-libs
+	mkdir -p $(MODEL_DIR)
+	[ "$(MODEL_DIR)" != "$(CURDIR)/models" ] || printf '*\n' > $(MODEL_DIR)/.gitignore
+	$(CARGO) run --release -p translator-models -- --lib-dir $(NATIVE_LIB_DIR) --model-dir $(MODEL_DIR)
+
 ## fmt: format all Rust code
 .PHONY: fmt
 fmt:
