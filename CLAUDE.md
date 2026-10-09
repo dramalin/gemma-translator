@@ -32,7 +32,7 @@ make run-native         # Rust UI with in-process inference (inference_backend =
 cargo test -p translator-core controller   # one crate, tests matching "controller"
 ```
 
-The Rust workspace (`translator-core`, `translator-io`, `translator-ui`) is checked with `make test` (all Rust tests plus the Python backend unit tests), `make clippy` and `cargo fmt --all -- --check`; the React frontend has no test suite or linter beyond `oxfmt`. `start.sh` kills anything on ports 9379/3000/5173 when not under systemd (`$INVOCATION_ID` unset). In prod, a stale `frontend/dist/` is NOT rebuilt automatically — run `npm run build` after frontend changes.
+The Rust workspace (`litert-lm-sys`, `moonshine-sys`, `translator-core`, `translator-io`, `translator-ui`, `translator-models`) is checked with `make test` (all Rust tests plus the Python backend unit tests), `make clippy` and `cargo fmt --all -- --check`; the React frontend has no test suite or linter beyond `oxfmt`. `start.sh` kills anything on ports 9379/3000/5173 when not under systemd (`$INVOCATION_ID` unset). In prod, a stale `frontend/dist/` is NOT rebuilt automatically — run `npm run build` after frontend changes.
 
 ## Architecture
 

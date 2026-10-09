@@ -96,7 +96,7 @@ synthesis itself, without `server.py` or `litert-lm serve`:
 ```bash
 sudo apt-get install -y patchelf unzip libvulkan1
 make native-libs     # pinned libmoonshine / liblitert-lm into native/<arch>/lib
-make models          # ~3.5 GB of models into ./models (MODEL_DIR=... to change)
+make models          # ~3.8 GB of models into ./models (MODEL_DIR=... to change)
 make test-ffi        # FFI tests against those libraries and models
 ```
 

@@ -43,7 +43,7 @@ native-libs:
 
 MODEL_DIR ?= $(CURDIR)/models
 
-## models: download every model into MODEL_DIR (default ./models, ~3.5 GB)
+## models: download every model into MODEL_DIR (default ./models, ~3.8 GB)
 .PHONY: models
 models: native-libs
 	mkdir -p $(MODEL_DIR)
