@@ -1,3 +1,4 @@
+pub mod config;
 pub mod keys;
 pub mod lane;
 pub mod language;
