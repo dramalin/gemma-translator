@@ -54,6 +54,22 @@ fn missing_model_names_the_tool() {
 }
 
 #[test]
+#[ignore = "needs native libraries: make test-ffi"]
+fn partially_downloaded_model_names_the_missing_file() {
+    let models = tempfile::tempdir().unwrap();
+    let paths = ModelPaths::new(models.path());
+    let directory = paths.stt_dir(LanguageCode::Ko.stt_model());
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(directory.join("tokenizer.bin"), b"").unwrap();
+    let speech = NativeSpeech::spawn(env_dir("TRANSLATOR_NATIVE_LIB_DIR"), paths, Vec::new());
+    let error = speech
+        .transcribe(&[0.0; 1600], LanguageCode::Ko)
+        .unwrap_err();
+    assert!(error.to_string().contains("translator-models"), "{error}");
+    assert!(error.to_string().contains("encoder_model.ort"), "{error}");
+}
+
+#[test]
 #[ignore = "needs native libraries and models: make test-ffi"]
 fn translates_english_to_chinese_sentence_by_sentence() {
     let translator = NativeTranslator::spawn(

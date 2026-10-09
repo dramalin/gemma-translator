@@ -168,7 +168,7 @@ impl SpeechEngines {
         let directory = self.paths.stt_dir(model);
         let library = &self.library;
         self.transcribers.get_or_try_insert_with(language, || {
-            require_directory(&directory)?;
+            require_files(&directory, model.components)?;
             Transcriber::load(library, &directory, model_arch(model.arch))
                 .map_err(|error| engine_error(SERVICE, error))
         })
@@ -188,8 +188,26 @@ impl SpeechEngines {
                 voice.language_tag,
                 &voice.synthesizer_options(root_text),
             )
-            .map_err(|error| engine_error(SERVICE, error))
+            // The C side resolves the voice's files, so a partial download
+            // surfaces only as this failure.
+            .map_err(|error| engine_error(SERVICE, format!("{error}; run translator-models")))
         })
+    }
+}
+
+/// Fails on the first of `files` missing from `directory`, so an
+/// interrupted download points at translator-models.
+fn require_files(directory: &Path, files: &[&str]) -> Result<(), PipelineError> {
+    match files
+        .iter()
+        .map(|file| directory.join(file))
+        .find(|path| !path.is_file())
+    {
+        None => Ok(()),
+        Some(missing) => Err(engine_error(
+            SERVICE,
+            format!("{} is missing; run translator-models", missing.display()),
+        )),
     }
 }
 
