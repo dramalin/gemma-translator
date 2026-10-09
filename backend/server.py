@@ -30,6 +30,8 @@ import ssl
 import threading
 from collections import OrderedDict
 
+from pcm import STT_SAMPLE_RATE, decode_pcm16le, encode_pcm16le, parse_tts_request
+
 # Multilingual STT via Moonshine.
 # Language is fixed at recognizer construction, so we lazily build (and cache) one
 # recognizer per language actually used.
@@ -260,6 +262,66 @@ class ProxyHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(str(e).encode('utf-8'))
 
+    def send_json(self, status, payload):
+        body = json.dumps(payload).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def read_body(self):
+        content_length = int(self.headers.get('Content-Length', 0))
+        return self.rfile.read(content_length) if content_length > 0 else b''
+
+    def handle_stt_v2(self):
+        # Raw 16-bit PCM in, used by the Rust UI (no base64/JSON wrapping).
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        language = query.get('language', ['en'])[0]
+        if language not in SUPPORTED_STT_LANGS:
+            self.send_json(400, {"error": f"Unsupported language: {language}"})
+            return
+        try:
+            samples = decode_pcm16le(self.read_body())
+        except ValueError as e:
+            self.send_json(400, {"error": str(e)})
+            return
+        try:
+            with _stt_lock:
+                recognizer = get_stt_recognizer(language)
+                transcript = recognizer.transcribe_without_streaming(samples, STT_SAMPLE_RATE)
+            text = " ".join(line.text for line in transcript.lines)
+            print(f"[STT v2] Transcribed: {text}")
+            self.send_json(200, {"text": text})
+        except Exception as e:
+            traceback.print_exc()
+            self.send_json(500, {"error": str(e)})
+
+    def handle_tts_v2(self):
+        # JSON in, raw 16-bit PCM out; the sample rate travels in X-Sample-Rate.
+        try:
+            text, language = parse_tts_request(self.read_body())
+        except ValueError as e:
+            self.send_json(400, {"error": str(e)})
+            return
+        if language not in TTS_LANG_MAP:
+            self.send_json(400, {"error": f"Unsupported language: {language}"})
+            return
+        try:
+            with _tts_lock:
+                engine = get_tts_engine(language)
+                audio, sample_rate = engine.synthesize(text)
+            body = encode_pcm16le(audio)
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/octet-stream')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('X-Sample-Rate', str(int(sample_rate)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as e:
+            traceback.print_exc()
+            self.send_json(500, {"error": str(e)})
+
     def handle_volume(self):
         client_ip = self.client_address[0]
         if client_ip not in ('127.0.0.1', '::1', 'localhost'):
@@ -381,6 +443,12 @@ class ProxyHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(str(e).encode('utf-8'))
 
     def do_POST(self):
+        if self.path.startswith('/v2/stt'):
+            self.handle_stt_v2()
+            return
+        if self.path.startswith('/v2/tts'):
+            self.handle_tts_v2()
+            return
         if self.path.startswith('/proxy'):
             self.handle_proxy()
             return
