@@ -6,7 +6,7 @@ use translator_core::language::LanguageCode;
 use translator_core::pipeline::{AudioClip, PipelineError, SpeechToText, TextToSpeech};
 
 use crate::audio_convert::{f32_to_pcm16_le, pcm16_le_to_f32};
-use crate::http_error::request_error;
+use crate::http_error::{read_error, request_error};
 
 const SERVICE: &str = "speech service";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -52,7 +52,9 @@ impl SpeechToText for SpeechServiceClient {
             .set("Content-Type", "application/octet-stream")
             .send_bytes(&f32_to_pcm16_le(samples))
             .map_err(|error| request_error(SERVICE, READ_TIMEOUT, error))?;
-        let body = response.into_string().map_err(invalid)?;
+        let body = response
+            .into_string()
+            .map_err(|error| read_error(SERVICE, READ_TIMEOUT, error))?;
         let parsed: SttResponse = serde_json::from_str(&body).map_err(invalid)?;
         Ok(parsed.text)
     }
@@ -79,7 +81,7 @@ impl TextToSpeech for SpeechServiceClient {
         response
             .into_reader()
             .read_to_end(&mut bytes)
-            .map_err(invalid)?;
+            .map_err(|error| read_error(SERVICE, READ_TIMEOUT, error))?;
         let samples = pcm16_le_to_f32(&bytes).ok_or_else(|| invalid("odd PCM byte count"))?;
         Ok(AudioClip {
             samples,

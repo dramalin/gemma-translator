@@ -28,9 +28,12 @@ pub(crate) fn request_error(
             }
         }
         ureq::Error::Transport(transport) => {
-            let is_timeout = std::error::Error::source(&transport)
-                .and_then(|source| source.downcast_ref::<io::Error>())
-                .is_some_and(is_timeout);
+            // Only an I/O error on an open connection is a read timeout; a
+            // connect timeout (ConnectionFailed) means the service is unreachable.
+            let is_timeout = transport.kind() == ureq::ErrorKind::Io
+                && std::error::Error::source(&transport)
+                    .and_then(|source| source.downcast_ref::<io::Error>())
+                    .is_some_and(is_timeout);
             if is_timeout {
                 timed_out(service, read_timeout)
             } else {

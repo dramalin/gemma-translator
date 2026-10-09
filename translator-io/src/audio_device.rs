@@ -26,6 +26,10 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Output samples (all channels) reserved for the mix buffer up front; larger
+/// than the period of common devices.
+const OUTPUT_BUFFER_RESERVE: usize = 16_384;
+
 /// Recordings longer than this are cut off, so a stuck key cannot grow the
 /// buffer without bound.
 const MAX_RECORDING: Duration = Duration::from_secs(60);
@@ -224,8 +228,9 @@ where
     T: SizedSample + FromSample<f32>,
 {
     let channels = config.channels;
-    // Reused across callbacks; grows only if the device asks for a larger buffer.
-    let mut mixed: Vec<f32> = Vec::new();
+    // Reused across callbacks and allocated here, outside the real-time
+    // callback; it grows only if the device asks for a larger buffer.
+    let mut mixed: Vec<f32> = Vec::with_capacity(OUTPUT_BUFFER_RESERVE);
     device
         .build_output_stream(
             config,

@@ -54,6 +54,8 @@ unzip -q -j "$WORK/moonshine.whl" 'moonshine_voice/libmoonshine.so' \
 unzip -q -j "$WORK/litert.whl" 'litert_lm/liblitert-lm.so' -d "$DEST"
 # libmoonshine.so looks for onnxruntime in ../moonshine_voice.libs; point it at its own directory.
 patchelf --set-rpath '$ORIGIN' "$DEST/libmoonshine.so"
+# Written last: make treats the libraries as fetched only once every step worked.
+touch "$DEST/.complete"
 
 echo "Native libraries for $ARCH in $DEST:"
 ls -1 "$DEST"

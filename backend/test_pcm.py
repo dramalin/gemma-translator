@@ -14,6 +14,7 @@
 
 import json
 import unittest
+from decimal import ROUND_HALF_UP, Decimal
 
 import numpy as np
 
@@ -48,6 +49,18 @@ class EncodePcmTests(unittest.TestCase):
         samples = np.array([2.5, -2.5, 1.4], dtype=np.float64) / 32767.0
         encoded = encode_pcm16le(samples)
         np.testing.assert_array_equal(np.frombuffer(encoded, dtype="<i2"), [3, -3, 1])
+
+    def test_matches_round_half_away_from_zero_on_the_float32_product(self):
+        # Rust computes the product in f32 and rounds it half away from zero.
+        rng = np.random.default_rng(7)
+        ties = (np.arange(-40, 40, dtype=np.float32) + np.float32(0.5)) / np.float32(32767.0)
+        samples = np.concatenate([rng.uniform(-1, 1, 5000).astype(np.float32), ties])
+        products = np.clip(samples, -1.0, 1.0) * np.float32(32767.0)
+        expected = [
+            int(Decimal(float(p)).to_integral_value(rounding=ROUND_HALF_UP)) for p in products
+        ]
+        encoded = np.frombuffer(encode_pcm16le(samples), dtype="<i2")
+        np.testing.assert_array_equal(encoded, expected)
 
 
 class ParseTtsRequestTests(unittest.TestCase):

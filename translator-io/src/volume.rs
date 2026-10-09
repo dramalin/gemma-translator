@@ -37,15 +37,18 @@ impl CommandRunner for SystemCommandRunner {
         // Read stdout while the program runs: a program whose output fills the
         // pipe would otherwise block and never exit.
         let mut pipe = child.stdout.take()?;
-        let reader = thread::spawn(move || {
+        let (stdout_sender, stdout_receiver) = mpsc::channel();
+        thread::spawn(move || {
             let mut stdout = String::new();
-            pipe.read_to_string(&mut stdout).ok().map(|_| stdout)
+            let _ = stdout_sender.send(pipe.read_to_string(&mut stdout).ok().map(|_| stdout));
         });
         let deadline = Instant::now() + COMMAND_TIMEOUT;
         loop {
             match child.try_wait().ok()? {
                 Some(status) => {
-                    let stdout = reader.join().ok()??;
+                    // Bounded: a daemon the command spawned may keep stdout open.
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    let stdout = stdout_receiver.recv_timeout(remaining).ok()??;
                     return status.success().then_some(stdout);
                 }
                 None if Instant::now() >= deadline => {

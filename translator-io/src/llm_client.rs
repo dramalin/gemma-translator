@@ -137,8 +137,12 @@ impl Translator for LlmClient {
 
         if response.content_type() != "text/event-stream" {
             // The server ignored "stream": read one regular completion.
-            let completion: Completion =
-                serde_json::from_str(&response.into_string().map_err(invalid)?).map_err(invalid)?;
+            let completion: Completion = serde_json::from_str(
+                &response
+                    .into_string()
+                    .map_err(|error| read_error(SERVICE, READ_TIMEOUT, error))?,
+            )
+            .map_err(invalid)?;
             if cancel.load(Ordering::SeqCst) {
                 return Ok(());
             }

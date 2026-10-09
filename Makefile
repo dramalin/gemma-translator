@@ -35,13 +35,14 @@ run-native: native-libs
 	$(CARGO) build -p translator-ui
 	target_dir=$$($(CARGO) metadata --format-version 1 --no-deps \
 		| sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p'); \
+	test -n "$$target_dir" || { echo "cargo metadata failed" >&2; exit 1; }; \
 	ln -sfn $(NATIVE_LIB_DIR) "$$target_dir/debug/lib" && "$$target_dir/debug/translator"
 
 ## native-libs: download libmoonshine / liblitert-lm into native/<arch>/lib (skipped when present; make -B native-libs refetches)
 .PHONY: native-libs
-native-libs: $(NATIVE_LIB_DIR)/liblitert-lm.so
+native-libs: $(NATIVE_LIB_DIR)/.complete
 
-$(NATIVE_LIB_DIR)/liblitert-lm.so:
+$(NATIVE_LIB_DIR)/.complete:
 	scripts/fetch-native-libs.sh $(NATIVE_ARCH)
 
 MODEL_DIR ?= $(CURDIR)/models

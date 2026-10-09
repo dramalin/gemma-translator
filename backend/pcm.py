@@ -36,7 +36,9 @@ def encode_pcm16le(samples):
 
     Rounds half away from zero, exactly like the Rust side's `f32_to_pcm16_le`
     (numpy's own `round` rounds half to even)."""
-    scaled = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0) * 32767.0
+    # Scale in float32 as Rust does, then add the half in float64, where the
+    # sum is exact (in float32 it can round up across a power of two).
+    scaled = (np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0) * np.float32(32767.0)).astype(np.float64)
     return np.trunc(scaled + np.copysign(0.5, scaled)).astype("<i2").tobytes()
 
 

@@ -256,6 +256,8 @@ impl AppState {
                         .on_capture_finished(captured.duration, captured.has_samples());
                     self.pending_capture = Some(captured);
                     self.execute(follow_up);
+                    // StartJob (if any) has taken it; drop a discarded recording now.
+                    self.pending_capture = None;
                 }
                 Effect::CancelJob(job) => self.runner.cancel(job),
                 Effect::StartJob(request) => {
@@ -285,8 +287,6 @@ impl AppState {
     }
 }
 
-/// In-process inference: one speech thread (preloading both lanes' languages)
-/// and one model thread, both loading their libraries from `<exe dir>/lib`.
 /// Replaces the model's rows only when they differ, so Slint does not redo
 /// the list for unchanged contents on every frame.
 fn set_if_changed<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
@@ -295,6 +295,8 @@ fn set_if_changed<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec
     }
 }
 
+/// In-process inference: one speech thread (preloading both lanes' languages)
+/// and one model thread, both loading their libraries from `<exe dir>/lib`.
 fn native_services(config: &Config) -> Services {
     let lib_dir = native::default_lib_dir();
     let paths = ModelPaths::new(&config.model_dir);
