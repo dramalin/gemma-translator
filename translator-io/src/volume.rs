@@ -34,12 +34,18 @@ impl CommandRunner for SystemCommandRunner {
             }
         }
         let mut child = command.spawn().ok()?;
+        // Read stdout while the program runs: a program whose output fills the
+        // pipe would otherwise block and never exit.
+        let mut pipe = child.stdout.take()?;
+        let reader = thread::spawn(move || {
+            let mut stdout = String::new();
+            pipe.read_to_string(&mut stdout).ok().map(|_| stdout)
+        });
         let deadline = Instant::now() + COMMAND_TIMEOUT;
         loop {
             match child.try_wait().ok()? {
                 Some(status) => {
-                    let mut stdout = String::new();
-                    child.stdout.take()?.read_to_string(&mut stdout).ok()?;
+                    let stdout = reader.join().ok()??;
                     return status.success().then_some(stdout);
                 }
                 None if Instant::now() >= deadline => {
@@ -79,39 +85,37 @@ impl<R: CommandRunner> VolumeControl<R> {
             })
     }
 
-    /// Steps the volume by 5 % and returns the new level.
+    /// Steps the volume by 5 % without going past 100 % and returns the new level.
     pub fn adjust(&self, direction: RotateDirection) -> Option<u16> {
         let is_up = direction == RotateDirection::Next;
-        let attempts: [(&str, [&str; 3]); 3] = [
-            (
-                "wpctl",
-                [
-                    "set-volume",
-                    "@DEFAULT_AUDIO_SINK@",
-                    if is_up { "5%+" } else { "5%-" },
-                ],
-            ),
-            (
-                "pactl",
-                [
-                    "set-sink-volume",
-                    "@DEFAULT_SINK@",
-                    if is_up { "+5%" } else { "-5%" },
-                ],
-            ),
-            (
-                "amixer",
-                ["sset", "Master", if is_up { "5%+" } else { "5%-" }],
-            ),
+        let wpctl_step = if is_up { "5%+" } else { "5%-" };
+        let pactl_step = if is_up { "+5%" } else { "-5%" };
+        let wpctl_args = [
+            "set-volume",
+            "-l",
+            "1.0",
+            "@DEFAULT_AUDIO_SINK@",
+            wpctl_step,
         ];
-        let is_changed = attempts
+        let pactl_args = ["set-sink-volume", "@DEFAULT_SINK@", pactl_step];
+        let amixer_args = ["sset", "Master", wpctl_step];
+        let attempts: [(&str, &[&str]); 3] = [
+            ("wpctl", &wpctl_args),
+            ("pactl", &pactl_args),
+            ("amixer", &amixer_args),
+        ];
+        let changed_with = attempts
             .iter()
-            .any(|(program, args)| self.runner.run(program, args).is_some());
-        if is_changed {
-            self.current_percent()
-        } else {
-            None
+            .find(|(program, args)| self.runner.run(program, args).is_some())
+            .map(|(program, _)| *program)?;
+        let percent = self.current_percent();
+        // wpctl caps itself (-l) and amixer stops at its maximum; pactl does not.
+        if changed_with == "pactl" && percent.is_some_and(|percent| percent > 100) {
+            self.runner
+                .run("pactl", &["set-sink-volume", "@DEFAULT_SINK@", "100%"])?;
+            return self.current_percent();
         }
+        percent
     }
 }
 
@@ -235,6 +239,30 @@ mod tests {
     }
 
     #[test]
+    fn pactl_is_pulled_back_to_one_hundred_percent() {
+        let runner = FakeRunner::with(&[
+            ("pactl set-sink-volume @DEFAULT_SINK@ +5%", ""),
+            (
+                "pactl get-sink-volume @DEFAULT_SINK@",
+                "Volume: front-left: 68811 / 105% / 1.27 dB",
+            ),
+            ("pactl set-sink-volume @DEFAULT_SINK@ 100%", ""),
+        ]);
+        let control = VolumeControl::new(runner);
+        control.adjust(RotateDirection::Next);
+        let calls = control.runner.calls.lock().unwrap().clone();
+        assert!(calls.contains(&"pactl set-sink-volume @DEFAULT_SINK@ 100%".to_string()));
+    }
+
+    #[test]
+    fn system_runner_reads_large_output() {
+        let output = SystemCommandRunner
+            .run("head", &["-c", "200000", "/dev/zero"])
+            .expect("head is available");
+        assert_eq!(output.len(), 200_000);
+    }
+
+    #[test]
     fn missing_tools_give_none_without_panicking() {
         let control = VolumeControl::new(FakeRunner::default());
         assert_eq!(control.current_percent(), None);
@@ -244,7 +272,7 @@ mod tests {
     #[test]
     fn adjust_uses_five_percent_steps_and_rereads() {
         let runner = FakeRunner::with(&[
-            ("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-", ""),
+            ("wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%-", ""),
             ("wpctl get-volume @DEFAULT_AUDIO_SINK@", "Volume: 0.70"),
         ]);
         let control = VolumeControl::new(runner);
@@ -253,7 +281,7 @@ mod tests {
         assert_eq!(
             calls,
             [
-                "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-",
+                "wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%-",
                 "wpctl get-volume @DEFAULT_AUDIO_SINK@"
             ]
         );
@@ -291,7 +319,7 @@ mod tests {
     fn worker_reads_at_start_and_after_each_adjustment() {
         let worker = VolumeWorker::spawn(FakeRunner::with(&[
             ("wpctl get-volume @DEFAULT_AUDIO_SINK@", "Volume: 0.75"),
-            ("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+", ""),
+            ("wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+", ""),
         ]));
         assert_eq!(wait_for_reading(&worker), Some(75));
         worker.adjust(RotateDirection::Next);
@@ -306,7 +334,7 @@ mod tests {
         let worker = VolumeWorker::spawn(GatedRunner {
             inner: FakeRunner::with(&[
                 ("wpctl get-volume @DEFAULT_AUDIO_SINK@", "Volume: 0.40"),
-                ("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-", ""),
+                ("wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%-", ""),
             ]),
             release: Mutex::new(release_receiver),
         });
