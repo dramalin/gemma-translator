@@ -30,6 +30,11 @@ pub enum PipelineError {
         service: &'static str,
         message: String,
     },
+    #[error("{service} failed: {message}")]
+    Engine {
+        service: &'static str,
+        message: String,
+    },
 }
 
 pub trait SpeechToText: Send + Sync {
@@ -52,4 +57,18 @@ pub trait Translator: Send + Sync {
 
 pub trait TextToSpeech: Send + Sync {
     fn synthesize(&self, text: &str, language: LanguageCode) -> Result<AudioClip, PipelineError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn engine_error_names_the_service() {
+        let error = PipelineError::Engine {
+            service: "speech engine",
+            message: "model missing".to_string(),
+        };
+        assert_eq!(error.to_string(), "speech engine failed: model missing");
+    }
 }

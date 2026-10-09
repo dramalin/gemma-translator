@@ -98,6 +98,14 @@ impl From<ThemeColor> for String {
     }
 }
 
+/// Where inference runs: the phase A HTTP services, or in-process through FFI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InferenceBackend {
+    Http,
+    Native,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -110,6 +118,8 @@ pub struct Config {
     pub speech_service_url: String,
     pub llm_endpoint: String,
     pub llm_model: String,
+    pub inference_backend: InferenceBackend,
+    pub model_dir: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_input_device: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -128,6 +138,8 @@ impl Default for Config {
             speech_service_url: "http://localhost:3000".to_string(),
             llm_endpoint: "http://localhost:9379/v1".to_string(),
             llm_model: "gemma4-e2b".to_string(),
+            inference_backend: InferenceBackend::Http,
+            model_dir: PathBuf::from("/var/lib/gemma-translator/models"),
             audio_input_device: None,
             audio_output_device: None,
         }
@@ -308,5 +320,29 @@ mod tests {
         );
         assert_eq!(ThemeColor::Orange.rgb(), (0xff, 0xa5, 0x00));
         assert_eq!(ThemeColor::Blue.name(), "BLUE");
+    }
+
+    #[test]
+    fn inference_backend_and_model_dir_have_defaults_and_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let defaults = Config::load(&path).unwrap();
+        assert_eq!(defaults.inference_backend, InferenceBackend::Http);
+        assert_eq!(
+            defaults.model_dir,
+            std::path::PathBuf::from("/var/lib/gemma-translator/models")
+        );
+
+        std::fs::write(
+            &path,
+            "inference_backend = \"native\"\nmodel_dir = \"/home/pi/models\"\n",
+        )
+        .unwrap();
+        let config = Config::load(&path).unwrap();
+        assert_eq!(config.inference_backend, InferenceBackend::Native);
+        assert_eq!(
+            config.model_dir,
+            std::path::PathBuf::from("/home/pi/models")
+        );
     }
 }
