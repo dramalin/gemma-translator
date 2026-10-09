@@ -162,15 +162,13 @@ impl Controller {
         }
     }
 
-    /// Called after `Effect::StopCapture` with the length of the recording.
-    pub fn on_capture_finished(&mut self, duration: Duration) -> Vec<Effect> {
+    /// Called after `Effect::StopCapture` with the length of the recording and
+    /// whether the device delivered any samples at all.
+    pub fn on_capture_finished(&mut self, duration: Duration, has_samples: bool) -> Vec<Effect> {
         let Phase::Transcribing(lane) = self.phase else {
             return Vec::new();
         };
-        if self.current_job.is_some() {
-            return Vec::new();
-        }
-        if duration < MIN_RECORDING_DURATION {
+        if duration < MIN_RECORDING_DURATION || !has_samples {
             self.phase = Phase::Idle;
             return Vec::new();
         }
@@ -376,7 +374,7 @@ mod tests {
         controller.handle_command(Command::StartRecording(lane));
         controller.handle_command(Command::StopRecording(lane));
         match controller
-            .on_capture_finished(Duration::from_secs(1))
+            .on_capture_finished(Duration::from_secs(1), true)
             .as_slice()
         {
             [Effect::StartJob(request)] => request.clone(),
@@ -429,6 +427,17 @@ mod tests {
     }
 
     #[test]
+    fn recording_without_samples_is_discarded() {
+        let mut c = controller();
+        c.handle_command(Command::StartRecording(Lane::One));
+        c.handle_command(Command::StopRecording(Lane::One));
+        assert!(c
+            .on_capture_finished(Duration::from_secs(2), false)
+            .is_empty());
+        assert_eq!(c.phase(), Phase::Idle);
+    }
+
+    #[test]
     fn short_recording_is_discarded() {
         let mut c = controller();
         c.handle_command(Command::StartRecording(Lane::One));
@@ -437,7 +446,9 @@ mod tests {
             [Effect::StopCapture]
         );
         assert_eq!(c.phase(), Phase::Transcribing(Lane::One));
-        assert!(c.on_capture_finished(Duration::from_millis(200)).is_empty());
+        assert!(c
+            .on_capture_finished(Duration::from_millis(200), true)
+            .is_empty());
         assert_eq!(c.phase(), Phase::Idle);
     }
 
@@ -580,7 +591,7 @@ mod tests {
             job,
             sentence: "late".to_string(),
         });
-        assert_ne!(c.transcript().translation, "late");
+        assert_eq!(c.transcript().translation, "");
         assert_eq!(c.phase(), Phase::Recording(Lane::One));
     }
 
@@ -589,7 +600,7 @@ mod tests {
         controller.handle_command(Command::StartRecording(lane));
         controller.handle_command(Command::StopRecording(lane));
         assert!(controller
-            .on_capture_finished(Duration::from_millis(200))
+            .on_capture_finished(Duration::from_millis(200), true)
             .is_empty());
     }
 

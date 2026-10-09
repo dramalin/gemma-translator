@@ -5,7 +5,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use translator_core::pipeline::STT_SAMPLE_RATE;
 
-use crate::audio_convert::{downmix_to_mono, resample_linear, rms};
+use crate::audio_convert::{downmix_to_mono, resample_linear};
 use crate::playback_queue::PlaybackQueue;
 
 #[derive(Debug, thiserror::Error)]
@@ -26,12 +26,33 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// One recording, converted for the speech recognizer.
+/// Recordings longer than this are cut off, so a stuck key cannot grow the
+/// buffer without bound.
+const MAX_RECORDING: Duration = Duration::from_secs(60);
+
+/// One recording in the device's own format. Converting it for the speech
+/// recognizer is left to the caller, so it can happen off the UI thread.
 pub struct CapturedAudio {
-    pub samples: Vec<f32>,
+    pub interleaved: Vec<f32>,
+    pub sample_rate: u32,
+    pub channels: u16,
     pub duration: Duration,
 }
 
+impl CapturedAudio {
+    pub fn has_samples(&self) -> bool {
+        !self.interleaved.is_empty()
+    }
+
+    /// Mono at `STT_SAMPLE_RATE`.
+    pub fn into_stt_samples(self) -> Vec<f32> {
+        let mono = downmix_to_mono(&self.interleaved, self.channels);
+        resample_linear(&mono, self.sample_rate, STT_SAMPLE_RATE)
+    }
+}
+
+/// Shared with the input callback, which only ever pushes into the capacity
+/// reserved by `start`, so it never allocates.
 #[derive(Default)]
 struct CaptureBuffer {
     is_capturing: bool,
@@ -81,8 +102,13 @@ impl AudioRecorder {
     }
 
     pub fn start(&self) {
+        let capacity = MAX_RECORDING.as_secs() as usize
+            * self.sample_rate as usize
+            * usize::from(self.channels.max(1));
+        // Allocate before taking the lock the audio callback also takes.
+        let samples = Vec::with_capacity(capacity);
         let mut buffer = lock(&self.buffer);
-        buffer.samples.clear();
+        buffer.samples = samples;
         buffer.is_capturing = true;
         buffer.started_at = Some(Instant::now());
     }
@@ -98,9 +124,10 @@ impl AudioRecorder {
                 .unwrap_or_default();
             (std::mem::take(&mut buffer.samples), duration)
         };
-        let mono = downmix_to_mono(&interleaved, self.channels);
         CapturedAudio {
-            samples: resample_linear(&mono, self.sample_rate, STT_SAMPLE_RATE),
+            interleaved,
+            sample_rate: self.sample_rate,
+            channels: self.channels,
             duration,
         }
     }
@@ -124,15 +151,22 @@ where
         .build_input_stream(
             config,
             move |data: &[T], _: &cpal::InputCallbackInfo| {
-                let samples: Vec<f32> = data
-                    .iter()
-                    .map(|sample| sample.to_sample::<f32>())
-                    .collect();
                 let mut buffer = lock(&buffer);
-                buffer.recent_level = rms(&samples);
-                if buffer.is_capturing {
-                    buffer.samples.extend_from_slice(&samples);
+                let is_capturing = buffer.is_capturing;
+                let mut sum_of_squares = 0.0f32;
+                for sample in data {
+                    let value = sample.to_sample::<f32>();
+                    sum_of_squares += value * value;
+                    // Past the reserved capacity the recording is cut off.
+                    if is_capturing && buffer.samples.len() < buffer.samples.capacity() {
+                        buffer.samples.push(value);
+                    }
                 }
+                buffer.recent_level = if data.is_empty() {
+                    0.0
+                } else {
+                    (sum_of_squares / data.len() as f32).sqrt()
+                };
             },
             |error| eprintln!("[audio] input stream error: {error}"),
             None,
@@ -190,13 +224,15 @@ where
     T: SizedSample + FromSample<f32>,
 {
     let channels = config.channels;
+    // Reused across callbacks; grows only if the device asks for a larger buffer.
+    let mut mixed: Vec<f32> = Vec::new();
     device
         .build_output_stream(
             config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
-                let mut mixed = vec![0.0f32; data.len()];
+                mixed.resize(data.len(), 0.0);
                 queue.fill(&mut mixed, channels);
-                for (out, sample) in data.iter_mut().zip(mixed) {
+                for (out, &sample) in data.iter_mut().zip(&mixed) {
                     *out = T::from_sample(sample);
                 }
             },
@@ -204,4 +240,36 @@ where
             None,
         )
         .map_err(device_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn captured_audio_converts_to_mono_at_the_stt_rate() {
+        // 32 kHz stereo; the right channel is silent.
+        let interleaved: Vec<f32> = (0..64).flat_map(|i| [i as f32, 0.0]).collect();
+        let captured = CapturedAudio {
+            interleaved,
+            sample_rate: 32_000,
+            channels: 2,
+            duration: Duration::from_millis(2),
+        };
+        assert!(captured.has_samples());
+        let samples = captured.into_stt_samples();
+        assert_eq!(samples.len(), 32);
+        assert_eq!(samples[1], 1.0);
+    }
+
+    #[test]
+    fn empty_capture_has_no_samples() {
+        let captured = CapturedAudio {
+            interleaved: Vec::new(),
+            sample_rate: 48_000,
+            channels: 1,
+            duration: Duration::from_secs(1),
+        };
+        assert!(!captured.has_samples());
+    }
 }

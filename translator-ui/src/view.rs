@@ -163,7 +163,7 @@ mod tests {
         controller.handle_command(Command::StartRecording(Lane::One));
         assert_eq!(status_line(&controller), "RECORDING");
         controller.handle_command(Command::StopRecording(Lane::One));
-        let effects = controller.on_capture_finished(std::time::Duration::from_secs(1));
+        let effects = controller.on_capture_finished(std::time::Duration::from_secs(1), true);
         let translator_core::controller::Effect::StartJob(request) = &effects[0] else {
             panic!("expected a job");
         };

@@ -8,7 +8,11 @@ pub fn downmix_to_mono(interleaved: &[f32], channels: u16) -> Vec<f32> {
 }
 
 /// Linear-interpolation resampler, a port of the old `audioHelpers.js::resample`.
+/// A zero rate is meaningless and yields no samples.
 pub fn resample_linear(samples: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+    if from_rate == 0 || to_rate == 0 {
+        return Vec::new();
+    }
     if from_rate == to_rate || samples.is_empty() {
         return samples.to_vec();
     }
@@ -47,13 +51,6 @@ pub fn pcm16_le_to_f32(bytes: &[u8]) -> Option<Vec<f32>> {
     )
 }
 
-pub fn rms(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    (samples.iter().map(|s| s * s).sum::<f32>() / samples.len() as f32).sqrt()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,6 +73,12 @@ mod tests {
     }
 
     #[test]
+    fn resample_with_a_zero_rate_is_empty() {
+        assert!(resample_linear(&[0.5, 0.25], 0, 16_000).is_empty());
+        assert!(resample_linear(&[0.5, 0.25], 48_000, 0).is_empty());
+    }
+
+    #[test]
     fn resample_of_empty_input_is_empty() {
         assert!(resample_linear(&[], 48_000, 16_000).is_empty());
     }
@@ -93,11 +96,5 @@ mod tests {
     #[test]
     fn odd_pcm_length_is_rejected() {
         assert_eq!(pcm16_le_to_f32(&[0, 1, 2]), None);
-    }
-
-    #[test]
-    fn rms_of_constant_signal() {
-        assert!((rms(&[0.5, -0.5, 0.5, -0.5]) - 0.5).abs() < 1e-6);
-        assert_eq!(rms(&[]), 0.0);
     }
 }

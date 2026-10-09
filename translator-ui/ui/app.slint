@@ -183,6 +183,8 @@ export component AppWindow inherits Window {
     // Return true when the key was handled.
     callback key-pressed(string) -> bool;
     callback key-released(string) -> bool;
+    // The key handler lost focus (e.g. the window was deactivated).
+    callback keyboard-focus-lost();
 
     forward-focus: key-handler;
 
@@ -204,6 +206,9 @@ export component AppWindow inherits Window {
                 return accept;
             }
             return reject;
+        }
+        focus-lost(reason) => {
+            root.keyboard-focus-lost();
         }
 
         VerticalLayout {

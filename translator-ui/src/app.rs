@@ -7,10 +7,12 @@ use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::Instant;
 
-use slint::{ModelRc, VecModel};
+use slint::{Model, ModelRc, VecModel};
 use translator_core::config::{Config, InferenceBackend};
 use translator_core::controller::{Controller, Effect, JobEvent, Phase};
-use translator_core::keys::{command_for_key_press, command_for_key_release, Key, KeyboardMode};
+use translator_core::keys::{
+    command_for_key_press, command_for_key_release, Command, Key, KeyboardMode,
+};
 use translator_core::lane::Lane;
 use translator_core::models::ModelPaths;
 use translator_core::pipeline::STT_SAMPLE_RATE;
@@ -54,7 +56,9 @@ impl Capture {
                     .unwrap_or_default();
                 let count = (duration.as_secs_f32() * STT_SAMPLE_RATE as f32) as usize;
                 CapturedAudio {
-                    samples: vec![0.0; count],
+                    interleaved: vec![0.0; count],
+                    sample_rate: STT_SAMPLE_RATE,
+                    channels: 1,
                     duration,
                 }
             }
@@ -80,7 +84,7 @@ pub struct AppState {
     volume: VolumeWorker,
     volume_percent: Option<u16>,
     config_path: Option<PathBuf>,
-    pending_samples: Option<Vec<f32>>,
+    pending_capture: Option<CapturedAudio>,
     levels: Vec<f32>,
     levels_model: Rc<VecModel<f32>>,
     settings_model: Rc<VecModel<SettingsRow>>,
@@ -144,7 +148,7 @@ impl AppState {
             volume,
             volume_percent: None,
             config_path,
-            pending_samples: None,
+            pending_capture: None,
             levels: Vec::new(),
             levels_model: Rc::new(VecModel::default()),
             settings_model: Rc::new(VecModel::default()),
@@ -221,12 +225,20 @@ impl AppState {
         window.set_is_translation_right_to_left(transcript.is_translation_right_to_left);
         window.set_status_text(status_line(controller).into());
         window.set_is_settings_open(controller.is_settings_open());
-        self.levels_model.set_vec(self.levels.clone());
-        self.settings_model.set_vec(settings_rows(
-            config,
-            &self.settings_cursor,
-            self.volume_percent,
-        ));
+        set_if_changed(&self.levels_model, self.levels.clone());
+        set_if_changed(
+            &self.settings_model,
+            settings_rows(config, &self.settings_cursor, self.volume_percent),
+        );
+    }
+
+    /// The window lost keyboard focus, so the key release that would end a
+    /// recording may never arrive: end it now.
+    pub fn handle_focus_lost(&mut self) {
+        if let Phase::Recording(lane) = self.controller.phase() {
+            let effects = self.controller.handle_command(Command::StopRecording(lane));
+            self.execute(effects);
+        }
     }
 
     fn execute(&mut self, effects: Vec<Effect>) {
@@ -239,14 +251,23 @@ impl AppState {
                 Effect::StartCapture => self.capture.start(),
                 Effect::StopCapture => {
                     let captured = self.capture.stop();
-                    self.pending_samples = Some(captured.samples);
-                    let follow_up = self.controller.on_capture_finished(captured.duration);
+                    let follow_up = self
+                        .controller
+                        .on_capture_finished(captured.duration, captured.has_samples());
+                    self.pending_capture = Some(captured);
                     self.execute(follow_up);
                 }
                 Effect::CancelJob(job) => self.runner.cancel(job),
                 Effect::StartJob(request) => {
-                    let samples = self.pending_samples.take().unwrap_or_default();
-                    self.runner.start(request, samples);
+                    let captured = self.pending_capture.take();
+                    self.runner.start(
+                        request,
+                        Box::new(move || {
+                            captured
+                                .map(CapturedAudio::into_stt_samples)
+                                .unwrap_or_default()
+                        }),
+                    );
                 }
                 Effect::AdjustVolume(direction) => self.volume.adjust(direction),
                 Effect::SaveConfig => self.save_config(),
@@ -266,6 +287,14 @@ impl AppState {
 
 /// In-process inference: one speech thread (preloading both lanes' languages)
 /// and one model thread, both loading their libraries from `<exe dir>/lib`.
+/// Replaces the model's rows only when they differ, so Slint does not redo
+/// the list for unchanged contents on every frame.
+fn set_if_changed<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
+    if model.iter().ne(rows.iter().cloned()) {
+        model.set_vec(rows);
+    }
+}
+
 fn native_services(config: &Config) -> Services {
     let lib_dir = native::default_lib_dir();
     let paths = ModelPaths::new(&config.model_dir);

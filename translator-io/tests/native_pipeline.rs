@@ -83,7 +83,7 @@ fn english_speech_becomes_spoken_chinese() {
             target: LanguageCode::Zh,
             enable_tts: true,
         },
-        samples,
+        Box::new(move || samples),
     );
 
     let mut transcript = String::new();

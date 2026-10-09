@@ -54,18 +54,22 @@ impl Translator for ScriptedTranslator {
     }
 }
 
-/// Signals when it starts, waits (up to 2 s) for cancellation, then reports
-/// whether it stopped because it was cancelled.
+/// Emits its sentences, signals that it started, waits (up to 2 s) for
+/// cancellation, then reports whether it stopped because it was cancelled.
 struct BlockingTranslator {
+    sentences: Vec<&'static str>,
     started: Mutex<Sender<()>>,
     exited: Mutex<Sender<bool>>,
 }
 
 /// The translator plus receivers for its "started" and "exited (was cancelled)" signals.
-fn blocking_translator() -> (BlockingTranslator, Receiver<()>, Receiver<bool>) {
+fn blocking_translator(
+    sentences: Vec<&'static str>,
+) -> (BlockingTranslator, Receiver<()>, Receiver<bool>) {
     let (started_sender, started) = mpsc::channel();
     let (exited_sender, exited) = mpsc::channel();
     let translator = BlockingTranslator {
+        sentences,
         started: Mutex::new(started_sender),
         exited: Mutex::new(exited_sender),
     };
@@ -79,8 +83,11 @@ impl Translator for BlockingTranslator {
         _source: LanguageCode,
         _target: LanguageCode,
         cancel: &AtomicBool,
-        _on_sentence: &mut dyn FnMut(String),
+        on_sentence: &mut dyn FnMut(String),
     ) -> Result<(), PipelineError> {
+        for sentence in &self.sentences {
+            on_sentence(sentence.to_string());
+        }
         self.started.lock().unwrap().send(()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         while !cancel.load(Ordering::SeqCst) && Instant::now() < deadline {
@@ -224,7 +231,7 @@ fn full_job_speaks_every_sentence() {
         ScriptedTranslator(vec!["Hola.", "Adiós."]),
         ScriptedTts(Ok(clip())),
     );
-    runner.start(request(1, true), vec![0.0; 16_000]);
+    runner.start(request(1, true), Box::new(|| vec![0.0; 16_000]));
     let job = JobId(1);
     assert_eq!(
         events(&receiver),
@@ -256,7 +263,7 @@ fn without_speech_output_nothing_is_played() {
         ScriptedTranslator(vec!["Hola."]),
         ScriptedTts(Ok(clip())),
     );
-    runner.start(request(1, false), Vec::new());
+    runner.start(request(1, false), Box::new(Vec::new));
     let collected = events(&receiver);
     assert_eq!(
         collected.last(),
@@ -272,7 +279,7 @@ fn empty_transcript_stops_after_transcription() {
         ScriptedTranslator(vec!["x"]),
         ScriptedTts(Ok(clip())),
     );
-    runner.start(request(1, true), Vec::new());
+    runner.start(request(1, true), Box::new(Vec::new));
     assert_eq!(
         events(&receiver),
         [JobEvent::Transcribed {
@@ -293,7 +300,7 @@ fn transcription_errors_are_reported() {
         ScriptedTranslator(vec![]),
         ScriptedTts(Ok(clip())),
     );
-    runner.start(request(1, true), Vec::new());
+    runner.start(request(1, true), Box::new(Vec::new));
     assert_eq!(
         events(&receiver),
         [JobEvent::Failed {
@@ -310,7 +317,7 @@ fn a_panicking_service_fails_the_job() {
         ScriptedTranslator(vec![]),
         ScriptedTts(Ok(clip())),
     );
-    runner.start(request(1, true), Vec::new());
+    runner.start(request(1, true), Box::new(Vec::new));
     assert_eq!(
         events(&receiver),
         [JobEvent::Failed {
@@ -321,18 +328,22 @@ fn a_panicking_service_fails_the_job() {
 }
 
 #[test]
-fn speech_errors_are_reported_after_the_translation() {
+fn speech_error_ends_the_job_while_translation_is_still_running() {
     let error = PipelineError::Service {
         service: "speech service",
         status: 500,
         message: "tts".to_string(),
     };
-    let (runner, _sink, receiver) = runner(
+    let (translator, started, exited) = blocking_translator(vec!["Hola."]);
+    let (runner, sink, receiver) = runner(
         ScriptedStt(Ok("hello".to_string())),
-        ScriptedTranslator(vec!["Hola."]),
+        translator,
         ScriptedTts(Err(error.clone())),
     );
-    runner.start(request(1, true), Vec::new());
+    runner.start(request(1, true), Box::new(Vec::new));
+    started.recv_timeout(Duration::from_secs(2)).unwrap();
+    // The failed synthesis cancels the translation instead of waiting for it.
+    assert_eq!(exited.recv_timeout(Duration::from_secs(3)), Ok(true));
     let collected = events(&receiver);
     assert_eq!(
         collected.last(),
@@ -341,18 +352,19 @@ fn speech_errors_are_reported_after_the_translation() {
             message: error.to_string()
         })
     );
-    assert!(collected.contains(&JobEvent::TranslationFinished { job: JobId(1) }));
+    assert!(!collected.contains(&JobEvent::TranslationFinished { job: JobId(1) }));
+    assert!(sink.clips.lock().unwrap().is_empty());
 }
 
 #[test]
 fn cancelled_job_emits_nothing_more_and_clears_playback() {
-    let (translator, started, exited) = blocking_translator();
+    let (translator, started, exited) = blocking_translator(Vec::new());
     let (runner, sink, receiver) = runner(
         ScriptedStt(Ok("hello".to_string())),
         translator,
         ScriptedTts(Ok(clip())),
     );
-    runner.start(request(1, true), Vec::new());
+    runner.start(request(1, true), Box::new(Vec::new));
     started.recv_timeout(Duration::from_secs(2)).unwrap();
     runner.cancel(JobId(1));
     assert_eq!(exited.recv_timeout(Duration::from_secs(3)), Ok(true));
@@ -368,15 +380,15 @@ fn cancelled_job_emits_nothing_more_and_clears_playback() {
 
 #[test]
 fn starting_a_new_job_cancels_the_previous_one() {
-    let (translator, started, exited) = blocking_translator();
+    let (translator, started, exited) = blocking_translator(Vec::new());
     let (runner, _sink, receiver) = runner(
         ScriptedStt(Ok("hello".to_string())),
         translator,
         ScriptedTts(Ok(clip())),
     );
-    runner.start(request(1, true), Vec::new());
+    runner.start(request(1, true), Box::new(Vec::new));
     started.recv_timeout(Duration::from_secs(2)).unwrap();
-    runner.start(request(2, true), Vec::new());
+    runner.start(request(2, true), Box::new(Vec::new));
     started.recv_timeout(Duration::from_secs(2)).unwrap();
     // Job 2 is still blocked, so this exit report can only come from job 1.
     assert_eq!(exited.recv_timeout(Duration::from_secs(3)), Ok(true));
@@ -408,7 +420,7 @@ fn translation_error_stops_speaking_the_sentences_already_sent() {
             calls: Arc::clone(&calls),
         },
     );
-    runner.start(request(1, true), Vec::new());
+    runner.start(request(1, true), Box::new(Vec::new));
     let collected = events(&receiver);
     assert_eq!(
         collected.last(),

@@ -7,7 +7,7 @@ mod view;
 slint::include_modules!();
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::rc::Rc;
 use std::time::Duration;
@@ -52,9 +52,7 @@ fn load_config(path: PathBuf) -> (Config, Option<PathBuf>) {
         Ok(config) => return (config, Some(path)),
         Err(error) => error,
     };
-    let mut bad_name = path.clone().into_os_string();
-    bad_name.push(".bad");
-    let bad_path = PathBuf::from(bad_name);
+    let bad_path = unused_backup_path(&path);
     match std::fs::rename(&path, &bad_path) {
         Ok(()) => {
             eprintln!(
@@ -72,6 +70,20 @@ fn load_config(path: PathBuf) -> (Config, Option<PathBuf>) {
             (Config::default(), None)
         }
     }
+}
+
+/// `<name>.bad`, or `<name>.bad.1`, `.bad.2`, … when earlier backups exist,
+/// so a second broken config never overwrites the first one's backup.
+fn unused_backup_path(path: &Path) -> PathBuf {
+    let with_suffix = |suffix: String| {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(suffix);
+        PathBuf::from(name)
+    };
+    std::iter::once(with_suffix(".bad".to_string()))
+        .chain((1..).map(|index| with_suffix(format!(".bad.{index}"))))
+        .find(|candidate| !candidate.exists())
+        .expect("an unused backup name exists")
 }
 
 fn main() -> ExitCode {
@@ -106,6 +118,8 @@ fn main() -> ExitCode {
     window.on_key_pressed(move |text| key_state.borrow_mut().handle_key_pressed(&text));
     let release_state = Rc::clone(&state);
     window.on_key_released(move |text| release_state.borrow_mut().handle_key_released(&text));
+    let focus_state = Rc::clone(&state);
+    window.on_keyboard_focus_lost(move || focus_state.borrow_mut().handle_focus_lost());
 
     let frame_timer = slint::Timer::default();
     let weak_window = window.as_weak();
@@ -199,15 +213,36 @@ mod tests {
     }
 
     #[test]
-    fn config_that_cannot_be_moved_aside_disables_saving() {
+    fn a_second_broken_config_keeps_the_first_backup() {
         let dir = tempfile::tempdir().unwrap();
-        // A directory where the file should be: unreadable as a config, and
-        // the rename onto an occupied non-empty `.bad` directory fails.
         let path = dir.path().join("config.toml");
-        std::fs::create_dir(&path).unwrap();
-        let bad_path = dir.path().join("config.toml.bad");
-        std::fs::create_dir(&bad_path).unwrap();
-        std::fs::write(bad_path.join("keep"), "").unwrap();
-        assert_eq!(load_config(path), (Config::default(), None));
+        std::fs::write(&path, "first = [broken").unwrap();
+        load_config(path.clone());
+        std::fs::write(&path, "second = [broken").unwrap();
+        load_config(path.clone());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config.toml.bad")).unwrap(),
+            "first = [broken"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("config.toml.bad.1")).unwrap(),
+            "second = [broken"
+        );
+    }
+
+    #[test]
+    fn config_that_cannot_be_moved_aside_disables_saving() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let path = locked.join("config.toml");
+        std::fs::write(&path, "theme_color = [broken").unwrap();
+        // No write permission on the directory: the rename to `.bad` fails.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = load_config(path);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(result, (Config::default(), None));
     }
 }
