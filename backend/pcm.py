@@ -32,9 +32,12 @@ def decode_pcm16le(body):
 
 
 def encode_pcm16le(samples):
-    """Float samples (clipped to [-1, 1]) -> 16-bit little-endian PCM bytes."""
-    clipped = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0)
-    return (clipped * 32767.0).astype("<i2").tobytes()
+    """Float samples (clipped to [-1, 1]) -> 16-bit little-endian PCM bytes.
+
+    Rounds half away from zero, exactly like the Rust side's `f32_to_pcm16_le`
+    (numpy's own `round` rounds half to even)."""
+    scaled = np.clip(np.asarray(samples, dtype=np.float32), -1.0, 1.0) * 32767.0
+    return np.trunc(scaled + np.copysign(0.5, scaled)).astype("<i2").tobytes()
 
 
 def parse_tts_request(body):

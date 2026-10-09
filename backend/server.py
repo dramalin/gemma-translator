@@ -443,10 +443,12 @@ class ProxyHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(str(e).encode('utf-8'))
 
     def do_POST(self):
-        if self.path.startswith('/v2/stt'):
+        # The /v2 routes match the exact path (a query string is allowed).
+        route = urllib.parse.urlparse(self.path).path
+        if route == '/v2/stt':
             self.handle_stt_v2()
             return
-        if self.path.startswith('/v2/tts'):
+        if route == '/v2/tts':
             self.handle_tts_v2()
             return
         if self.path.startswith('/proxy'):

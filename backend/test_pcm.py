@@ -40,8 +40,14 @@ class EncodePcmTests(unittest.TestCase):
     def test_clips_and_scales_to_int16(self):
         encoded = encode_pcm16le([0.0, 0.5, 2.0, -2.0])
         np.testing.assert_array_equal(
-            np.frombuffer(encoded, dtype="<i2"), [0, 16383, 32767, -32767]
+            np.frombuffer(encoded, dtype="<i2"), [0, 16384, 32767, -32767]
         )
+
+    def test_rounds_half_away_from_zero_like_rust(self):
+        # 2.5 / 32767 scales to exactly 2.5: Rust's f32::round gives 3, not 2.
+        samples = np.array([2.5, -2.5, 1.4], dtype=np.float64) / 32767.0
+        encoded = encode_pcm16le(samples)
+        np.testing.assert_array_equal(np.frombuffer(encoded, dtype="<i2"), [3, -3, 1])
 
 
 class ParseTtsRequestTests(unittest.TestCase):
