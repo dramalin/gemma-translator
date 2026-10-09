@@ -1,6 +1,8 @@
 pub mod config;
+pub mod controller;
 pub mod keys;
 pub mod lane;
 pub mod language;
+pub mod pipeline;
 pub mod settings;
 pub mod text;
