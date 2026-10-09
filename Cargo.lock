@@ -4637,8 +4637,11 @@ name = "translator-io"
 version = "0.1.0"
 dependencies = [
  "cpal",
+ "litert-lm-sys",
+ "moonshine-sys",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "translator-core",
  "ureq",

@@ -11,3 +11,8 @@ serde_json = "1"
 ureq = { version = "2.12", default-features = false }
 cpal = "0.15"
 thiserror = "2"
+moonshine-sys = { path = "../moonshine-sys" }
+litert-lm-sys = { path = "../litert-lm-sys" }
+
+[dev-dependencies]
+tempfile = "3"
