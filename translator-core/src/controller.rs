@@ -303,7 +303,14 @@ impl Controller {
         let mut effects = Vec::new();
         if let Some(job) = self.current_job.take() {
             effects.push(Effect::CancelJob(job.id));
+            if self.transcript.transcription == ANALYZING_TEXT {
+                self.transcript.transcription = String::new();
+            }
+            if self.transcript.translation == TRANSLATING_TEXT {
+                self.transcript.translation = String::new();
+            }
         }
+        self.transcript.status = String::new();
         effects.push(Effect::StopPlayback);
         if self.active_lane != lane {
             self.active_lane = lane;
@@ -575,6 +582,70 @@ mod tests {
         });
         assert_ne!(c.transcript().translation, "late");
         assert_eq!(c.phase(), Phase::Recording(Lane::One));
+    }
+
+    /// Starts a recording on `lane` and discards it as too short.
+    fn record_too_short(controller: &mut Controller, lane: Lane) {
+        controller.handle_command(Command::StartRecording(lane));
+        controller.handle_command(Command::StopRecording(lane));
+        assert!(controller
+            .on_capture_finished(Duration::from_millis(200))
+            .is_empty());
+    }
+
+    #[test]
+    fn cancelling_during_translation_clears_the_translation_placeholder() {
+        let mut c = controller();
+        let job = record(&mut c, Lane::One).id;
+        c.on_job_event(JobEvent::Transcribed {
+            job,
+            text: "hi".to_string(),
+        });
+        record_too_short(&mut c, Lane::One);
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.transcript().transcription, "hi");
+        assert_eq!(c.transcript().translation, "");
+        assert_eq!(c.transcript().status, "");
+    }
+
+    #[test]
+    fn cancelling_during_transcription_clears_both_placeholders() {
+        let mut c = controller();
+        record(&mut c, Lane::One);
+        record_too_short(&mut c, Lane::One);
+        assert_eq!(c.phase(), Phase::Idle);
+        assert_eq!(c.transcript().transcription, "");
+        assert_eq!(c.transcript().translation, "");
+        assert_eq!(c.transcript().status, "");
+    }
+
+    #[test]
+    fn cancelling_keeps_the_translation_already_received() {
+        let mut c = controller();
+        let job = record(&mut c, Lane::One).id;
+        c.on_job_event(JobEvent::Transcribed {
+            job,
+            text: "hi".to_string(),
+        });
+        c.on_job_event(JobEvent::SentenceTranslated {
+            job,
+            sentence: "Hello.".to_string(),
+        });
+        record_too_short(&mut c, Lane::One);
+        assert_eq!(c.transcript().transcription, "hi");
+        assert_eq!(c.transcript().translation, "Hello.");
+    }
+
+    #[test]
+    fn starting_a_recording_clears_the_previous_error() {
+        let mut c = controller();
+        let job = record(&mut c, Lane::One).id;
+        c.on_job_event(JobEvent::Failed {
+            job,
+            message: "boom".to_string(),
+        });
+        c.handle_command(Command::StartRecording(Lane::One));
+        assert_eq!(c.transcript().status, "");
     }
 
     #[test]
