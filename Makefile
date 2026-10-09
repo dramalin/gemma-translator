@@ -3,6 +3,8 @@
 
 CARGO     := cargo
 PI_TARGET := aarch64-unknown-linux-gnu
+NATIVE_ARCH    := $(shell uname -m)
+NATIVE_LIB_DIR := $(CURDIR)/native/$(NATIVE_ARCH)/lib
 
 .DEFAULT_GOAL := help
 
@@ -26,6 +28,11 @@ run-mock:
 .PHONY: run
 run:
 	$(CARGO) run -p translator-ui
+
+## native-libs: download libmoonshine / liblitert-lm for this machine into native/<arch>/lib
+.PHONY: native-libs
+native-libs:
+	scripts/fetch-native-libs.sh $(NATIVE_ARCH)
 
 ## fmt: format all Rust code
 .PHONY: fmt
