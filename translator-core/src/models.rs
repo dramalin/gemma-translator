@@ -159,7 +159,6 @@ impl ModelPaths {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::language::LanguageCode;
 
     #[test]
     fn every_language_has_an_stt_model_matching_moonshine_download_py() {

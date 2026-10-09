@@ -8,6 +8,7 @@ pub struct LruCache<K, V> {
 
 impl<K: PartialEq + Copy, V> LruCache<K, V> {
     pub fn new(capacity: usize) -> Self {
+        assert!(capacity > 0, "an LRU cache needs room for one entry");
         LruCache {
             capacity,
             entries: Vec::with_capacity(capacity),

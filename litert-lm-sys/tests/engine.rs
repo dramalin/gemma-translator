@@ -17,10 +17,12 @@ fn library() -> Arc<LiteRtLmLibrary> {
 
 fn engine(library: &Arc<LiteRtLmLibrary>) -> Engine {
     let models = env_dir("TRANSLATOR_MODEL_DIR");
+    let cache = models.join("cache");
+    std::fs::create_dir_all(&cache).unwrap();
     Engine::new(
         library,
         &models.join("gemma").join("gemma-4-E2B-it.litertlm"),
-        &models.join("cache"),
+        &cache,
     )
     .unwrap()
 }
@@ -73,6 +75,25 @@ fn streams_a_translation_in_fragments() {
             .any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c)),
         "no Chinese in {reply:?}"
     );
+}
+
+#[test]
+#[ignore = "needs native libraries and models: make test-ffi"]
+fn a_conversation_can_send_a_second_message() {
+    // The first stream's state is freed when the second message is sent.
+    let library = library();
+    let engine = engine(&library);
+    let mut conversation = engine
+        .create_conversation("Reply with exactly one word.")
+        .unwrap();
+    for prompt in ["Say yes.", "Say no."] {
+        let mut reply = String::new();
+        let end = conversation
+            .send_message_stream(prompt, &mut |text| reply.push_str(text), &|| false)
+            .unwrap();
+        assert_eq!(end, StreamEnd::Completed);
+        assert!(!reply.trim().is_empty(), "empty reply to {prompt:?}");
+    }
 }
 
 #[test]

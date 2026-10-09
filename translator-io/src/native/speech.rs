@@ -195,7 +195,12 @@ impl SpeechEngines {
                 )
                 // The C side resolves the voice's files, so a partial download
                 // surfaces only as this failure.
-                .map_err(|error| engine_error(SERVICE, format!("{error}; run translator-models")))
+                .map_err(|error| {
+                    engine_error(
+                        SERVICE,
+                        format!("{error}; if TTS files are missing, run translator-models"),
+                    )
+                })
             },
         )
     }
