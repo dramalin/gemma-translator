@@ -151,6 +151,10 @@ impl Conversation<'_> {
     /// `on_text` receives each text delta. `should_cancel` is polled every
     /// 20 ms; once it returns true the reply is cancelled, and the call still
     /// waits for the library's final callback before returning.
+    ///
+    /// A finished stream's state is freed at the next send on the same
+    /// conversation (or when the conversation is dropped). Callers in this
+    /// workspace send exactly one message per conversation.
     pub fn send_message_stream(
         &mut self,
         text: &str,

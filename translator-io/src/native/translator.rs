@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use litert_lm_sys::{Engine, LiteRtLmLibrary};
+use litert_lm_sys::{Engine, LiteRtLmLibrary, StreamEnd};
 use translator_core::language::LanguageCode;
 use translator_core::models::ModelPaths;
 use translator_core::pipeline::{PipelineError, Translator};
@@ -155,7 +155,11 @@ fn translate_once(engine: &Engine, request: &TranslateRequest) -> Result<(), Pip
             },
             &|| request.cancel.load(Ordering::SeqCst),
         )
-        .map(|_| ())
+        .map(|end| {
+            if end == StreamEnd::MaxTokensReached {
+                eprintln!("[model] translation stopped at the token limit");
+            }
+        })
         .map_err(|error| engine_error(SERVICE, error))
 }
 
