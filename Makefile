@@ -5,6 +5,7 @@ CARGO     := cargo
 PI_TARGET := aarch64-unknown-linux-gnu
 NATIVE_ARCH    := $(shell uname -m)
 NATIVE_LIB_DIR := $(CURDIR)/native/$(NATIVE_ARCH)/lib
+PYTHON         := $(if $(wildcard venv/bin/python3),venv/bin/python3,python3)
 
 .DEFAULT_GOAL := help
 
@@ -22,7 +23,7 @@ setup:
 .PHONY: test
 test:
 	$(CARGO) test --workspace
-	python3 -m unittest discover -s backend -p 'test_*.py'
+	$(PYTHON) -m unittest discover -s backend -p 'test_*.py'
 
 ## run-mock: run the UI on the desktop with mock speech and translation
 .PHONY: run-mock

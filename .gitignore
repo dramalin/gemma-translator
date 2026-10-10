@@ -33,3 +33,4 @@ coverage/
 .vscode/
 .omo/
 /package-lock.json
+/models/
