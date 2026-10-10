@@ -25,8 +25,12 @@ for arg in "$@"; do
     fi
 done
 
+OS="$(uname -s)"
+
 # Ensure PipeWire env is available for volume control (wpctl)
-export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+if [ "$OS" = "Linux" ]; then
+    export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+fi
 
 # Unbuffered Python stdout so server logs reach journald immediately
 # (block-buffered prints previously hid request logs and hampered debugging)
@@ -84,7 +88,11 @@ cd "$PROJECT_DIR"
 
 # Set system volume to max
 echo "[start.sh] Setting system volume to max..."
-wpctl set-volume @DEFAULT_AUDIO_SINK@ 1.0 || amixer sset Master 100% 2>/dev/null || true
+if [ "$OS" = "Darwin" ]; then
+    osascript -e "set volume output volume 100" || true
+else
+    wpctl set-volume @DEFAULT_AUDIO_SINK@ 1.0 || amixer sset Master 100% 2>/dev/null || true
+fi
 
 # Start litert-lm in background
 echo "[start.sh] Starting litert-lm..."
@@ -130,7 +138,14 @@ else
     echo "[start.sh] Access the UI at http://localhost:${WEB_PORT}"
 fi
 
-# Wait for any child to exit (then the trap will clean up the others)
-wait -n
-echo "[start.sh] A child process exited. Shutting down."
-exit 1
+# Wait for any child to exit (then the trap will clean up the others).
+# macOS ships bash 3.2, which has no `wait -n`, so poll the children instead.
+while true; do
+    for pid in $LITERT_PID $API_PID $WEB_PID; do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "[start.sh] A child process exited. Shutting down."
+            exit 1
+        fi
+    done
+    sleep 1
+done
