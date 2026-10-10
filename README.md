@@ -120,6 +120,7 @@ make clippy      # lint, warnings are errors
 make test-ffi    # tests that need the native libraries and models (after make models)
 make test-soak   # long-running native memory test
 make fmt         # format the Rust code
+make clean       # remove target/ and dist/ (keeps native/ and models/)
 ```
 
 ## Project Structure

@@ -16,6 +16,7 @@ make run-mock           # Slint UI with mock services
 make test               # cargo test --workspace
 make clippy             # clippy with -D warnings
 make fmt                # cargo fmt --all
+make clean              # cargo clean + rm -rf dist (keeps native/ and models/)
 make native-libs        # fetch pinned libmoonshine / liblitert-lm into native/<arch>/lib
 make models             # download all models into MODEL_DIR (default ./models)
 make test-ffi           # #[ignore]d tests that need native libs + models

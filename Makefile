@@ -92,3 +92,9 @@ clippy:
 .PHONY: package-pi
 package-pi:
 	MODEL_DIR=$(MODEL_DIR) scripts/package-pi.sh
+
+## clean: remove build output (target/, dist/); keeps native/ and models/
+.PHONY: clean
+clean:
+	$(CARGO) clean
+	rm -rf dist
