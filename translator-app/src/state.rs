@@ -53,12 +53,7 @@ impl Capture {
                     .map(|start| start.elapsed())
                     .unwrap_or_default();
                 let count = (duration.as_secs_f32() * STT_SAMPLE_RATE as f32) as usize;
-                CapturedAudio {
-                    interleaved: vec![0.0; count],
-                    sample_rate: STT_SAMPLE_RATE,
-                    channels: 1,
-                    duration,
-                }
+                CapturedAudio::new(vec![0.0; count], STT_SAMPLE_RATE, 1, duration)
             }
         }
     }
