@@ -155,6 +155,46 @@ lines; count results from the `test result:` lines only.
 - `docs/` - design specs and implementation plans.
 - `stl/` - STL files for 3D printing the hardware case.
 
+## Architecture
+
+Crates and the native libraries they load:
+
+```mermaid
+flowchart TD
+    ui["translator-ui<br/>Slint program <code>translator</code>"] --> app
+    tui["translator-tui<br/>terminal program <code>translator-tui</code>"] --> app
+    app["translator-app<br/>AppState, AppView, mock services, CLI"] --> io
+    app --> core
+    io["translator-io<br/>cpal audio, volume, JobRunner, native workers"] --> core
+    io --> msys["moonshine-sys"]
+    io --> lsys["litert-lm-sys"]
+    models["translator-models<br/>model downloader (make models)"] --> core
+    models --> msys
+    core["translator-core<br/>languages, keys, text, config, Controller"]
+    msys -. libloading .-> libm[("libmoonshine<br/>+ onnxruntime")]
+    lsys -. libloading .-> libl[("liblitert-lm")]
+```
+
+One recording, from key press to speech. The `Controller` returns `Effect`s that `AppState` carries out; the job runs on background threads and reports `JobEvent`s back to the UI thread.
+
+```mermaid
+flowchart TD
+    key(["Key press / release"]) --> ctrl["Controller<br/>(translator-core)"]
+    ctrl -- Effects --> state["AppState<br/>(translator-app)"]
+    state -- AppView --> screen(["Slint / terminal UI"])
+    mic(["Microphone"]) --> rec["AudioRecorder<br/>device rate, + 0.5 s tail"]
+    state -- start / stop --> rec
+    subgraph job ["JobRunner (background threads)"]
+        conv["Downmix, low-pass,<br/>resample to 16 kHz"] --> stt["Moonshine STT<br/>VAD off, repetition and<br/>CJK-space cleanup"]
+        stt --> mt["Gemma via LiteRT-LM<br/>streaming translation"]
+        mt --> split["Sentence splitter"]
+        split --> tts["Moonshine TTS<br/>per sentence"]
+    end
+    rec --> conv
+    tts --> play["AudioPlayer"] --> spk(["Speaker"])
+    job -- JobEvents --> state
+```
+
 ## Keyboard Shortcuts
 
 The Gemma Translator supports **two keyboard modes**. Switch between them anytime from the settings panel (Esc) or by editing `config.toml`; the choice is remembered across restarts.
