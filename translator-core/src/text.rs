@@ -229,29 +229,39 @@ fn is_cjk(c: char) -> bool {
 /// repeats ("no, no") are left alone.
 const MIN_REPEATED_PHRASE_CHARS: usize = 8;
 
-/// Cuts a recognizer's repetition loop at the end of `text`: when the text
-/// ends with a phrase followed by one or more copies of it (the last copy may
-/// be partial), only the first copy is kept. Moonshine falls into such loops
-/// when a recording holds several seconds of silence.
+/// Cuts a recognizer's repetition loop at the end of `text`: when a phrase is
+/// followed by one or more copies of it, only the first copy is kept. The loop
+/// may end in a partial copy or in a stray tail shorter than the phrase, which
+/// goes too. Moonshine falls into such loops when a recording holds several
+/// seconds of silence or steady noise.
 pub fn drop_trailing_repetition(text: &str) -> &str {
-    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
     let mut cut = len;
+    let mut run = vec![0usize; len];
     for period in MIN_REPEATED_PHRASE_CHARS..=len / 2 {
-        // Walk back while each character equals the one a period earlier.
-        let mut start = len;
-        while start > period && chars[start - 1].1 == chars[start - 1 - period].1 {
-            start -= 1;
+        // run[k]: how many characters up to k each equal the one a period earlier.
+        for k in 0..len {
+            run[k] = if k >= period && chars[k] == chars[k - period] {
+                run[k - 1] + 1
+            } else {
+                0
+            };
         }
-        // `start - period` begins the first copy; a loop needs a whole second copy.
-        if len - start >= period {
-            cut = cut.min(start);
+        // The loop must reach to within one period of the end, and hold a
+        // whole second copy; that copy starts at `end - run`.
+        for end in (len + 1).saturating_sub(period).max(1)..=len {
+            let length = run[end - 1];
+            if length >= period {
+                cut = cut.min(end - length);
+            }
         }
     }
     if cut == len {
         return text;
     }
-    text[..chars[cut].0].trim_end()
+    let byte = text.char_indices().nth(cut).map_or(text.len(), |(i, _)| i);
+    text[..byte].trim_end()
 }
 
 #[cfg(test)]
@@ -301,6 +311,13 @@ mod tests {
         );
         let whole = "请问最近的车站在哪里？请问最近的车站在哪里？请问最近";
         assert_eq!(drop_trailing_repetition(whole), "请问最近的车站在哪里？");
+        // The last copy breaks off into a stray tail shorter than the phrase.
+        let stray =
+            "请问车站在哪里我想买两张到台北的车票请问车站在哪里我想买两张到台北的车票我想买两张";
+        assert_eq!(
+            drop_trailing_repetition(stray),
+            "请问车站在哪里我想买两张到台北的车票"
+        );
     }
 
     #[test]

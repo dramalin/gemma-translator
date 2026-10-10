@@ -21,6 +21,7 @@ make native-libs        # fetch pinned libmoonshine / liblitert-lm into native/<
 make models             # download all models into MODEL_DIR (default ./models)
 make test-ffi           # #[ignore]d tests that need native libs + models
 make test-soak          # long-running native memory tests
+make eval-stt           # score STT on the recorded corpus in eval/ (see eval/README.md)
 make package-pi         # build dist/gemma-translator-pi.tar (cross + Docker, x86_64 Linux)
 sudo ./install.sh       # on the Pi, from the unpacked package: install binary, models and systemd service
 cargo test -p translator-core controller   # one crate, tests matching "controller"

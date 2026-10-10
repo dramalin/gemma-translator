@@ -73,6 +73,11 @@ FFI_ENV := TRANSLATOR_NATIVE_LIB_DIR=$(NATIVE_LIB_DIR) TRANSLATOR_MODEL_DIR=$(MO
 test-ffi:
 	$(FFI_ENV) $(CARGO) test --workspace -- --ignored --skip soak --test-threads=1
 
+## eval-stt: score speech recognition on the recorded corpus in eval/ (EVAL_ARGS="--runs 3 --only clean")
+.PHONY: eval-stt
+eval-stt:
+	$(FFI_ENV) $(CARGO) run --release -q -p translator-io --example stt_eval -- $(EVAL_ARGS)
+
 ## test-soak: long-running native memory tests
 .PHONY: test-soak
 test-soak:

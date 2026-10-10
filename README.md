@@ -131,6 +131,7 @@ make test        # all Rust tests
 make clippy      # lint, warnings are errors
 make test-ffi    # tests that need the native libraries and models (after make models)
 make test-soak   # long-running native memory test
+make eval-stt    # score speech recognition on recordings (see eval/README.md)
 make fmt         # format the Rust code
 make clean       # remove target/ and dist/ (keeps native/ and models/)
 ```

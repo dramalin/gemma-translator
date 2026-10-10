@@ -34,3 +34,4 @@ coverage/
 .omo/
 /package-lock.json
 /models/
+/eval/corpus/
