@@ -7,7 +7,7 @@ pub fn downmix_to_mono(interleaved: &[f32], channels: u16) -> Vec<f32> {
         .collect()
 }
 
-/// Linear-interpolation resampler, a port of the old `audioHelpers.js::resample`.
+/// Linear-interpolation resampler.
 /// When downsampling, the input is low-pass filtered first so content above
 /// the new Nyquist frequency does not alias into the band.
 /// A zero rate is meaningless and yields no samples.
@@ -91,28 +91,6 @@ impl LowPass {
     }
 }
 
-pub fn f32_to_pcm16_le(samples: &[f32]) -> Vec<u8> {
-    samples
-        .iter()
-        .flat_map(|sample| ((sample.clamp(-1.0, 1.0) * 32767.0).round() as i16).to_le_bytes())
-        .collect()
-}
-
-/// `None` when the byte count is odd (truncated stream).
-pub fn pcm16_le_to_f32(bytes: &[u8]) -> Option<Vec<f32>> {
-    if !bytes.len().is_multiple_of(2) {
-        return None;
-    }
-    Some(
-        bytes
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|&pair| f32::from(i16::from_le_bytes(pair)) / 32768.0)
-            .collect(),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,20 +153,5 @@ mod tests {
     #[test]
     fn resample_of_empty_input_is_empty() {
         assert!(resample_linear(&[], 48_000, 16_000).is_empty());
-    }
-
-    #[test]
-    fn pcm16_round_trip() {
-        let samples = [0.0, 0.5, -0.5, 1.0, -1.0];
-        let decoded = pcm16_le_to_f32(&f32_to_pcm16_le(&samples)).unwrap();
-        for (a, b) in samples.iter().zip(&decoded) {
-            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
-        }
-        assert_eq!(f32_to_pcm16_le(&[2.0]), 32767i16.to_le_bytes());
-    }
-
-    #[test]
-    fn odd_pcm_length_is_rejected() {
-        assert_eq!(pcm16_le_to_f32(&[0, 1, 2]), None);
     }
 }

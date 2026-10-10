@@ -142,7 +142,7 @@ fn load_engine(lib_dir: &Path, paths: &ModelPaths) -> Result<Engine, String> {
 }
 
 fn translate_once(engine: &Engine, request: &TranslateRequest) -> Result<(), PipelineError> {
-    // A fresh conversation per translation: no context carries over (spec §6.3).
+    // A fresh conversation per translation: no context carries over.
     let mut conversation = engine
         .create_conversation(&translation_system_prompt(request.source, request.target))
         .map_err(|error| engine_error(SERVICE, error))?;

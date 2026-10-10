@@ -6,7 +6,7 @@ use translator_core::pipeline::AudioClip;
 pub const BLIP_SAMPLE_RATE: u32 = 48_000;
 const SILENT_GAIN: f32 = 0.001;
 
-/// Envelope of one sound, copied from the old `audio-blip.js` oscillator settings.
+/// Pitch sweep and envelope of one sound.
 struct BlipShape {
     start_hz: f32,
     end_hz: f32,

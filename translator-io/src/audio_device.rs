@@ -20,6 +20,13 @@ pub enum AudioError {
     UnsupportedFormat(String),
 }
 
+fn find_device(
+    mut devices: impl Iterator<Item = cpal::Device>,
+    name: &str,
+) -> Option<cpal::Device> {
+    devices.find(|device| device.name().is_ok_and(|candidate| candidate == name))
+}
+
 fn device_error(error: impl ToString) -> AudioError {
     AudioError::Device(error.to_string())
 }
@@ -139,15 +146,10 @@ impl AudioRecorder {
     pub fn open(device_name: Option<&str>) -> Result<Self, AudioError> {
         let host = cpal::default_host();
         let device = match device_name {
-            Some(name) => host
-                .input_devices()
-                .map_err(device_error)?
-                .find(|device| device.name().is_ok_and(|candidate| candidate == name))
-                .ok_or(AudioError::NoDevice("input"))?,
-            None => host
-                .default_input_device()
-                .ok_or(AudioError::NoDevice("input"))?,
-        };
+            Some(name) => find_device(host.input_devices().map_err(device_error)?, name),
+            None => host.default_input_device(),
+        }
+        .ok_or(AudioError::NoDevice("input"))?;
         let supported = device.default_input_config().map_err(device_error)?;
         let sample_format = supported.sample_format();
         let config: cpal::StreamConfig = supported.into();
@@ -276,15 +278,10 @@ impl AudioPlayer {
     pub fn open(device_name: Option<&str>) -> Result<Self, AudioError> {
         let host = cpal::default_host();
         let device = match device_name {
-            Some(name) => host
-                .output_devices()
-                .map_err(device_error)?
-                .find(|device| device.name().is_ok_and(|candidate| candidate == name))
-                .ok_or(AudioError::NoDevice("output"))?,
-            None => host
-                .default_output_device()
-                .ok_or(AudioError::NoDevice("output"))?,
-        };
+            Some(name) => find_device(host.output_devices().map_err(device_error)?, name),
+            None => host.default_output_device(),
+        }
+        .ok_or(AudioError::NoDevice("output"))?;
         let supported = device.default_output_config().map_err(device_error)?;
         let sample_format = supported.sample_format();
         let config: cpal::StreamConfig = supported.into();

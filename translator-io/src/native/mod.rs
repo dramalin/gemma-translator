@@ -1,4 +1,4 @@
-//! In-process inference through the vendor libraries (spec phase B). Each
+//! In-process inference through the vendor libraries. Each
 //! service owns one worker thread that holds every native handle; job threads
 //! talk to it over channels.
 

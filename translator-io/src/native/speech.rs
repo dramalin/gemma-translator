@@ -15,7 +15,7 @@ use super::engine_error;
 use super::lru::LruCache;
 
 const SERVICE: &str = "speech engine";
-/// Same as `MAX_MODELS` in the Python service.
+/// Models kept loaded per kind (recognizer, voice); each is large.
 const MODELS_PER_KIND: usize = 2;
 
 /// Speech recognition and synthesis on one thread that owns every Moonshine handle.
@@ -34,6 +34,20 @@ enum SpeechRequest {
         language: LanguageCode,
         reply: Sender<Result<AudioClip, PipelineError>>,
     },
+}
+
+impl SpeechRequest {
+    /// Answers the request with `error`.
+    fn fail(self, error: PipelineError) {
+        match self {
+            SpeechRequest::Transcribe { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+            SpeechRequest::Synthesize { reply, .. } => {
+                let _ = reply.send(Err(error));
+            }
+        }
+    }
 }
 
 impl NativeSpeech {
@@ -93,14 +107,7 @@ fn run_speech_thread(
             let message = error.to_string();
             eprintln!("[speech] {message}");
             for request in requests {
-                match request {
-                    SpeechRequest::Transcribe { reply, .. } => {
-                        let _ = reply.send(Err(engine_error(SERVICE, &message)));
-                    }
-                    SpeechRequest::Synthesize { reply, .. } => {
-                        let _ = reply.send(Err(engine_error(SERVICE, &message)));
-                    }
-                }
+                request.fail(engine_error(SERVICE, &message));
             }
             return;
         }
