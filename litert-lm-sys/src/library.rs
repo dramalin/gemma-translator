@@ -4,13 +4,18 @@ use std::sync::Arc;
 
 use crate::ffi;
 
+/// The library's file name inside the native library directory.
+#[cfg(target_os = "macos")]
+pub const LITERT_LM_LIBRARY_FILE_NAME: &str = "liblitert-lm.dylib";
+/// The library's file name inside the native library directory.
+#[cfg(not(target_os = "macos"))]
 pub const LITERT_LM_LIBRARY_FILE_NAME: &str = "liblitert-lm.so";
 
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum LiteRtLmError {
     #[error("cannot load {path}: {message}")]
     Load { path: PathBuf, message: String },
-    #[error("{name} missing from liblitert-lm.so: {message}")]
+    #[error("{name} missing from {library}: {message}", library = LITERT_LM_LIBRARY_FILE_NAME)]
     Symbol { name: String, message: String },
     #[error("model file {0} not found; run translator-models")]
     ModelMissing(PathBuf),
@@ -101,5 +106,34 @@ impl LiteRtLmLibrary {
                 _library: ManuallyDrop::new(library),
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod file_name_tests {
+    use super::*;
+
+    #[test]
+    fn library_file_name_matches_the_platform() {
+        let expected = if cfg!(target_os = "macos") {
+            "liblitert-lm.dylib"
+        } else {
+            "liblitert-lm.so"
+        };
+        assert_eq!(LITERT_LM_LIBRARY_FILE_NAME, expected);
+    }
+
+    #[test]
+    fn symbol_error_names_the_platform_library() {
+        let error = LiteRtLmError::Symbol {
+            name: "litert_lm_engine_create".into(),
+            message: "not found".into(),
+        };
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "litert_lm_engine_create missing from {LITERT_LM_LIBRARY_FILE_NAME}: not found"
+            )
+        );
     }
 }

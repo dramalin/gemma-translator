@@ -31,7 +31,12 @@ fn engine(library: &Arc<LiteRtLmLibrary>) -> Engine {
 fn missing_library_names_the_path() {
     let dir = tempfile::tempdir().unwrap();
     let error = LiteRtLmLibrary::load(dir.path()).err().unwrap();
-    assert!(error.to_string().contains("liblitert-lm.so"), "{error}");
+    assert!(
+        error
+            .to_string()
+            .contains(litert_lm_sys::LITERT_LM_LIBRARY_FILE_NAME),
+        "{error}"
+    );
 }
 
 #[test]

@@ -7,13 +7,18 @@ use std::sync::Arc;
 
 use crate::ffi::{self, MoonshineOption, MOONSHINE_ERROR_NONE};
 
+/// The library's file name inside the native library directory.
+#[cfg(target_os = "macos")]
+pub const LIBRARY_FILE_NAME: &str = "libmoonshine.dylib";
+/// The library's file name inside the native library directory.
+#[cfg(not(target_os = "macos"))]
 pub const LIBRARY_FILE_NAME: &str = "libmoonshine.so";
 
 #[derive(Debug, thiserror::Error)]
 pub enum MoonshineError {
     #[error("cannot load {path}: {message}")]
     Load { path: PathBuf, message: String },
-    #[error("{name} missing from libmoonshine.so: {message}")]
+    #[error("{name} missing from {library}: {message}", library = LIBRARY_FILE_NAME)]
     Symbol { name: String, message: String },
     #[error("{function} failed ({code}): {message}")]
     Call {
@@ -224,5 +229,32 @@ impl OptionArray {
 
     pub(crate) fn len(&self) -> u64 {
         self.entries.len() as u64
+    }
+}
+
+#[cfg(test)]
+mod file_name_tests {
+    use super::*;
+
+    #[test]
+    fn library_file_name_matches_the_platform() {
+        let expected = if cfg!(target_os = "macos") {
+            "libmoonshine.dylib"
+        } else {
+            "libmoonshine.so"
+        };
+        assert_eq!(LIBRARY_FILE_NAME, expected);
+    }
+
+    #[test]
+    fn symbol_error_names_the_platform_library() {
+        let error = MoonshineError::Symbol {
+            name: "moonshine_get_version".into(),
+            message: "not found".into(),
+        };
+        assert_eq!(
+            error.to_string(),
+            format!("moonshine_get_version missing from {LIBRARY_FILE_NAME}: not found")
+        );
     }
 }

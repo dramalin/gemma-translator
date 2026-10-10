@@ -36,7 +36,7 @@ enum SpeechRequest {
 }
 
 impl NativeSpeech {
-    /// Starts the speech thread. It loads `libmoonshine.so` from `lib_dir`,
+    /// Starts the speech thread. It loads `libmoonshine` from `lib_dir`,
     /// then both kinds of model for each `preload` language, then serves requests.
     pub fn spawn(lib_dir: PathBuf, paths: ModelPaths, preload: Vec<LanguageCode>) -> NativeSpeech {
         let (requests, receiver) = mpsc::channel();
@@ -256,8 +256,14 @@ mod tests {
         let error = speech
             .transcribe(&[0.0; 160], LanguageCode::En)
             .unwrap_err();
-        assert!(error.to_string().contains("libmoonshine.so"), "{error}");
+        assert!(
+            error.to_string().contains(moonshine_sys::LIBRARY_FILE_NAME),
+            "{error}"
+        );
         let error = speech.synthesize("hi", LanguageCode::En).unwrap_err();
-        assert!(error.to_string().contains("libmoonshine.so"), "{error}");
+        assert!(
+            error.to_string().contains(moonshine_sys::LIBRARY_FILE_NAME),
+            "{error}"
+        );
     }
 }

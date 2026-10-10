@@ -39,7 +39,7 @@ enum TranslationEvent {
 }
 
 impl NativeTranslator {
-    /// Starts the model thread, which loads `liblitert-lm.so` and Gemma
+    /// Starts the model thread, which loads `liblitert-lm` and Gemma
     /// before serving requests (requests sent meanwhile wait in the queue).
     pub fn spawn(lib_dir: PathBuf, paths: ModelPaths) -> NativeTranslator {
         let (requests, receiver) = mpsc::channel();
@@ -283,6 +283,9 @@ mod tests {
         let translator =
             NativeTranslator::spawn(dir.path().to_path_buf(), ModelPaths::new(dir.path()));
         let (result, _) = translate(&translator, &AtomicBool::new(false));
-        assert!(result.unwrap_err().to_string().contains("liblitert-lm.so"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains(litert_lm_sys::LITERT_LM_LIBRARY_FILE_NAME));
     }
 }

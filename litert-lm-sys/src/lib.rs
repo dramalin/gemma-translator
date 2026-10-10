@@ -1,4 +1,4 @@
-//! Run-time bindings to `liblitert-lm.so` from the litert-lm-api 0.13.1 wheel.
+//! Run-time bindings to `liblitert-lm` (`.so` on Linux, `.dylib` on macOS) from the litert-lm-api 0.13.1 wheel.
 //! Signatures mirror the wheel's `litert_lm/_ffi.py` ctypes declarations.
 
 mod engine;

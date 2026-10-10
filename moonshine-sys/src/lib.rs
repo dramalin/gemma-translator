@@ -1,4 +1,4 @@
-//! Run-time bindings to `libmoonshine.so` from the moonshine-voice 0.0.65 wheel.
+//! Run-time bindings to `libmoonshine` (`.so` on Linux, `.dylib` on macOS) from the moonshine-voice 0.0.65 wheel.
 //! Signatures mirror the wheel's `moonshine_api.py` ctypes declarations.
 
 mod ffi;

@@ -14,7 +14,10 @@ fn missing_library_names_the_path() {
     let dir = tempfile::tempdir().unwrap();
     let error = MoonshineLibrary::load(dir.path()).err().unwrap();
     assert!(matches!(error, MoonshineError::Load { .. }));
-    assert!(error.to_string().contains("libmoonshine.so"), "{error}");
+    assert!(
+        error.to_string().contains(moonshine_sys::LIBRARY_FILE_NAME),
+        "{error}"
+    );
 }
 
 #[test]
