@@ -17,7 +17,7 @@
   - `https://files.pythonhosted.org/packages/7f/49/93c28833572682c434c60cea8bcf338b74b8f6b2dbe816186c6bb5242c16/moonshine_voice-0.0.65-py3-none-macosx_15_0_arm64.whl`, sha256 `3e92fa8497bf4fc40b6241e4dc29fd4ac77832f7f3d8addc4fd467a6bf1cf605`
   - `https://files.pythonhosted.org/packages/58/ae/5d1e2862d14ad1b08bdbc3392574dde37b98a06f4efb5181d946766ec81c/litert_lm_api-0.13.1-py3-none-macosx_12_0_arm64.whl`, sha256 `4a1bb68dbf5a60af9ac5fe03331968a7b4e91779e721cb531e6b41e71f2a2d77`
 - macOS library files: `moonshine_voice/libmoonshine.dylib`, `moonshine_voice/libonnxruntime.1.23.2.dylib`, `litert_lm/liblitert-lm.dylib`. No `install_name_tool` or `patchelf` on macOS.
-- Linux behaviour must not change: the same commands in the same order, the same wheels and the same files in `native/<arch>/lib`.
+- Linux behaviour must not change: the same commands in the same order, the same wheels and the same files in `native/<arch>/lib`. The one accepted difference: `start.sh` notices an exited child up to ~1 s later, because it polls instead of using `wait -n`.
 - Shell scripts must run under macOS's `/bin/bash` 3.2: no `wait -n`, no associative arrays, no `mapfile`, and no `set -u` combined with possibly empty arrays.
 - `make setup` never installs system packages. It only lists the install commands.
 - Volume steps are 5 % and are clamped to 0–100.
@@ -43,7 +43,7 @@ for item in venv native models frontend/node_modules; do
 done
 ```
 
-Commands that rewrite these items, such as `make -B native-libs` or `make models`, then write into the main checkout's copies. That is expected and leaves the same files there.
+Commands that rewrite these items, such as `make -B native-libs` or `make models`, then write into the main checkout's copies. That is expected and leaves the same files there. `fetch-native-libs.sh` deletes the target directory before unpacking. If it fails after that point, the main checkout's `native/<arch>/lib` is left without `.complete`; run `make native-libs` again before continuing.
 
 ## Refinements to the spec
 
@@ -74,6 +74,7 @@ Commands that rewrite these items, such as `make -B native-libs` or `make models
 
 **Files:**
 - Modify: `moonshine-sys/src/library.rs:10-17`, `moonshine-sys/src/lib.rs:1`
+- Modify: `moonshine-sys/tests/library.rs` (test `missing_library_names_the_path`, line 17)
 - Modify: `litert-lm-sys/src/library.rs:7-14`, `litert-lm-sys/src/lib.rs:1`, `litert-lm-sys/tests/engine.rs:31-35`
 - Modify: `translator-io/src/native/speech.rs` (doc comment near line 39; test near lines 250-262), `translator-io/src/native/translator.rs` (doc comment near line 42; test near lines 280-287)
 
@@ -206,6 +207,8 @@ In `litert-lm-sys/tests/engine.rs`, test `missing_library_names_the_path`, repla
     );
 ```
 
+In `moonshine-sys/tests/library.rs`, test `missing_library_names_the_path`, replace `contains("libmoonshine.so")` with `contains(moonshine_sys::LIBRARY_FILE_NAME)`.
+
 In `translator-io/src/native/speech.rs`, replace both `contains("libmoonshine.so")` assertions with `contains(moonshine_sys::LIBRARY_FILE_NAME)`. Change the doc comment `/// Starts the speech thread. It loads \`libmoonshine.so\` from \`lib_dir\`,` to say `` `libmoonshine` `` instead of `` `libmoonshine.so` ``.
 
 In `translator-io/src/native/translator.rs`, replace `contains("liblitert-lm.so")` with `contains(litert_lm_sys::LITERT_LM_LIBRARY_FILE_NAME)`. Change the doc comment's `` `liblitert-lm.so` `` to `` `liblitert-lm` ``.
@@ -213,7 +216,7 @@ In `translator-io/src/native/translator.rs`, replace `contains("liblitert-lm.so"
 Then search for any other hard-coded name:
 
 Run: `grep -rn 'libmoonshine\.so\|liblitert-lm\.so' --include=*.rs moonshine-sys litert-lm-sys translator-*`
-Expected: only the two `#[cfg(not(target_os = "macos"))]` constants.
+Expected: only the two `#[cfg(not(target_os = "macos"))]` constants. The five test and doc sites above now use the constants.
 
 - [ ] **Step 4: Run the full checks**
 
@@ -285,6 +288,7 @@ Then add these tests:
             (OSASCRIPT_GET, "98\n"),
             ("osascript -e set volume output volume 100", ""),
         ]));
+        // The fake keeps answering 98; the set command proves the clamp.
         assert_eq!(control.adjust(RotateDirection::Next), Some(98));
         let calls = control.runner.calls.lock().unwrap().clone();
         assert_eq!(
@@ -544,6 +548,7 @@ class ParseTests(unittest.TestCase):
         self.assertIsNone(parse_osascript_volume("missing value\n"))
         self.assertIsNone(parse_osascript_volume(""))
         self.assertIsNone(parse_osascript_volume("101"))
+        self.assertIsNone(parse_osascript_volume("\u00b2"))
 
     def test_step_clamps(self):
         self.assertEqual(step_percent(98, "up"), 100)
@@ -644,7 +649,7 @@ def linux_env():
 def parse_osascript_volume(output):
     """"75\\n" -> 75; "missing value" (no output device) -> None."""
     text = output.strip()
-    if not text.isdigit():
+    if not (text.isascii() and text.isdigit()):
         return None
     percent = int(text)
     return percent if percent <= 100 else None
@@ -787,7 +792,11 @@ case "$OS/$ARCH" in
         LITERT_SHA256=4a1bb68dbf5a60af9ac5fe03331968a7b4e91779e721cb531e6b41e71f2a2d77
         ;;
     Darwin/x86_64)
-        echo "error: Intel Macs are not supported (moonshine-voice has no x86_64 macOS wheel)" >&2
+        if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
+            echo "error: this shell runs under Rosetta; use a native arm64 terminal (arch -arm64 bash)" >&2
+        else
+            echo "error: Intel Macs are not supported (moonshine-voice has no x86_64 macOS wheel)" >&2
+        fi
         exit 2
         ;;
     *)
@@ -963,7 +972,7 @@ while true; do for pid in $A $B; do if ! kill -0 "$pid" 2>/dev/null; then exit 1
 echo "exit=$? after $(( $(date +%s) - start ))s"
 ```
 
-Expected: `exit=1 after 2s` or `3s`, and never 30 s.
+Expected: `exit=1 after 1s` or `2s`, and never 30 s.
 
 Run: `grep -n "wait -n" start.sh`
 Expected: no output.
@@ -1125,7 +1134,11 @@ need_command() { # need_command <command> <install hint>
 case "$OS" in
     Darwin)
         if [ "$ARCH" != arm64 ]; then
-            echo "error: Intel Macs are not supported (moonshine-voice has no x86_64 macOS wheel)." >&2
+            if [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = 1 ]; then
+                echo "error: this shell runs under Rosetta; use a native arm64 terminal (arch -arm64 bash)." >&2
+            else
+                echo "error: Intel Macs are not supported (moonshine-voice has no x86_64 macOS wheel)." >&2
+            fi
             exit 1
         fi
         MACOS_VERSION="$(sw_vers -productVersion)"
@@ -1136,6 +1149,7 @@ case "$OS" in
         xcode-select -p >/dev/null 2>&1 || MISSING+=("Xcode Command Line Tools|xcode-select --install")
         ;;
     Linux)
+        need_command make "$(install_hint make make)"
         need_command patchelf "$(install_hint patchelf patchelf)"
         need_command pkg-config "$(install_hint pkg-config pkg-config)"
         if command -v pkg-config >/dev/null 2>&1 && ! pkg-config --exists alsa; then
@@ -1154,7 +1168,12 @@ esac
 
 need_command cargo "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
 if ! python3 -c 'import sys, ensurepip, venv; sys.exit(sys.version_info < (3, 10))' >/dev/null 2>&1; then
-    MISSING+=("python3 >= 3.10 with venv|$(install_hint python@3.12 'python3 python3-venv')")
+    if [ "$OS" = Darwin ]; then
+        PYTHON_HINT="brew install python@3.12, then put \$(brew --prefix)/bin before /usr/bin in PATH"
+    else
+        PYTHON_HINT="sudo apt-get install -y python3 python3-venv"
+    fi
+    MISSING+=("python3 >= 3.10 with venv|$PYTHON_HINT")
 fi
 need_command curl "$(install_hint curl curl)"
 need_command unzip "$(install_hint unzip unzip)"
@@ -1271,6 +1290,8 @@ Expected: `syntax-ok`.
 
 - [ ] **Step 3: Verify the non-interactive and missing-tool paths**
 
+The expected results below are for this development machine. Gemma is already imported in the main venv, and `cargo` lives in `~/.cargo/bin`. On another machine, compare against what is actually installed.
+
 Run: `scripts/setup-env.sh < /dev/null; echo "exit=$?"`
 Expected:
 - `System tools: ok`;
@@ -1376,10 +1397,10 @@ In the Rust UI list, after the `make native-libs` needs `patchelf` line, add:
 
 - [ ] **Step 3: Cross-check the pure crates for macOS**
 
-Run: `rustup target add aarch64-apple-darwin && cargo check --target aarch64-apple-darwin -p moonshine-sys -p litert-lm-sys -p translator-core`
-Expected: `Finished`. This confirms the `cfg(target_os = "macos")` constants compile.
+Run: `rustup target add aarch64-apple-darwin && cargo check --tests --target aarch64-apple-darwin -p moonshine-sys -p litert-lm-sys -p translator-core`
+Expected: `Finished`. This confirms the `cfg(target_os = "macos")` constants and the macOS side of the new tests compile.
 
-Run: `cargo check --target aarch64-apple-darwin -p translator-io 2>&1 | tail -5`
+Run: `cargo check --tests --target aarch64-apple-darwin -p translator-io 2>&1 | tail -5`
 Expected: either `Finished`, or a failure inside a dependency's build script (for example `coreaudio-sys` needing the macOS SDK). Record which one happened in the task report. A failure in our own crates' code is a bug to fix here.
 
 - [ ] **Step 4: Final checks**
