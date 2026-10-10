@@ -108,7 +108,6 @@ pub struct AppState {
     volume: VolumeWorker,
     volume_percent: Option<u16>,
     config_path: Option<PathBuf>,
-    pending_capture: Option<CapturedAudio>,
     levels: Vec<f32>,
     record_style: RecordStyle,
     audio_warning: Option<String>,
@@ -118,7 +117,8 @@ impl AppState {
     /// Opens the configured (or default) microphone and speaker; without them
     /// it records silence and discards audio, so jobs still run, and
     /// `AppView::audio_warning` says why.
-    /// `model_dir_override` (from `--model-dir`) replaces `config.model_dir` for this run only; the saved config keeps its own value.
+    /// `model_dir_override` (from `--model-dir`) replaces `config.model_dir`
+    /// for this run only; the saved config keeps its own value.
     pub fn new(
         config: Config,
         config_path: Option<PathBuf>,
@@ -213,7 +213,6 @@ impl AppState {
             volume,
             volume_percent: None,
             config_path,
-            pending_capture: None,
             levels: Vec::new(),
             record_style,
             audio_warning,
@@ -316,6 +315,12 @@ impl AppState {
     }
 
     fn execute(&mut self, effects: Vec<Effect>) {
+        self.execute_with_capture(effects, None);
+    }
+
+    /// `captured` is the recording a `StartJob` among `effects` transcribes;
+    /// without one (or with the recording discarded) the job gets no samples.
+    fn execute_with_capture(&mut self, effects: Vec<Effect>, mut captured: Option<CapturedAudio>) {
         for effect in effects {
             match effect {
                 Effect::PlayBlip(blip) => self
@@ -324,22 +329,19 @@ impl AppState {
                 Effect::StopPlayback => self.playback.clear(),
                 Effect::StartCapture => self.capture.start(),
                 Effect::StopCapture => {
-                    let captured = self.capture.stop();
+                    let recording = self.capture.stop();
                     let follow_up = self
                         .controller
-                        .on_capture_finished(captured.duration, captured.has_samples());
-                    self.pending_capture = Some(captured);
-                    self.execute(follow_up);
-                    // StartJob (if any) has taken it; drop a discarded recording now.
-                    self.pending_capture = None;
+                        .on_capture_finished(recording.duration, recording.has_samples());
+                    self.execute_with_capture(follow_up, Some(recording));
                 }
                 Effect::CancelJob(job) => self.runner.cancel(job),
                 Effect::StartJob(request) => {
-                    let captured = self.pending_capture.take();
+                    let recording = captured.take();
                     self.runner.start(
                         request,
                         Box::new(move || {
-                            captured
+                            recording
                                 .map(CapturedAudio::into_stt_samples)
                                 .unwrap_or_default()
                         }),

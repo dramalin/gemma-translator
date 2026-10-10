@@ -66,10 +66,7 @@ impl Translator for MockTranslator {
 /// Sleeps one mock step; false when cancelled meanwhile.
 fn wait_unless_cancelled(cancel: &AtomicBool) -> bool {
     let deadline = Instant::now() + MOCK_STEP_DELAY;
-    while Instant::now() < deadline {
-        if cancel.load(Ordering::SeqCst) {
-            return false;
-        }
+    while Instant::now() < deadline && !cancel.load(Ordering::SeqCst) {
         thread::sleep(MOCK_POLL_INTERVAL);
     }
     !cancel.load(Ordering::SeqCst)

@@ -50,9 +50,10 @@ pub struct AppView {
 pub(crate) fn lane_view(controller: &Controller, lane: Lane) -> LaneView {
     LaneView {
         label: match lane {
-            Lane::One => "1".to_string(),
-            Lane::Two => "2".to_string(),
-        },
+            Lane::One => "1",
+            Lane::Two => "2",
+        }
+        .to_string(),
         language: controller.language(lane).display_name().to_uppercase(),
         is_active: controller.active_lane() == lane,
         is_recording: controller.phase() == Phase::Recording(lane),
@@ -90,10 +91,7 @@ pub(crate) fn settings_rows(
             let (label, value) = match item {
                 SettingsItem::KeyboardMode => (
                     "KEYBOARD",
-                    match config.keyboard_mode {
-                        KeyboardMode::Landscape => "LANDSCAPE".to_string(),
-                        KeyboardMode::Vertical => "VERTICAL".to_string(),
-                    },
+                    keyboard_mode_text(config.keyboard_mode).to_string(),
                 ),
                 SettingsItem::ThemeColor => ("THEME", config.theme_color.name().to_string()),
                 SettingsItem::EnableTts => (
@@ -118,6 +116,13 @@ pub(crate) fn settings_rows(
         .collect()
 }
 
+fn keyboard_mode_text(mode: KeyboardMode) -> &'static str {
+    match mode {
+        KeyboardMode::Landscape => "LANDSCAPE",
+        KeyboardMode::Vertical => "VERTICAL",
+    }
+}
+
 /// Scrolls in a new level while recording, decays otherwise; always `bar_count` long.
 pub(crate) fn update_levels(levels: &mut Vec<f32>, bar_count: usize, new_level: Option<f32>) {
     match new_level {
@@ -126,9 +131,8 @@ pub(crate) fn update_levels(levels: &mut Vec<f32>, bar_count: usize, new_level: 
     }
     if levels.len() > bar_count {
         levels.drain(..levels.len() - bar_count);
-    }
-    while levels.len() < bar_count {
-        levels.insert(0, 0.0);
+    } else {
+        levels.splice(..0, std::iter::repeat_n(0.0, bar_count - levels.len()));
     }
 }
 
