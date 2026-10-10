@@ -31,6 +31,7 @@ import threading
 from collections import OrderedDict
 
 from pcm import STT_SAMPLE_RATE, decode_pcm16le, encode_pcm16le, parse_tts_request
+import volume
 
 # Multilingual STT via Moonshine.
 # Language is fixed at recognizer construction, so we lazily build (and cache) one
@@ -339,96 +340,14 @@ class ProxyHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             else:
                 action = "get"
             
-            import subprocess
-            import re
-            
-            # PipeWire/wpctl needs XDG_RUNTIME_DIR to find its socket.
-            # The server process may not have it set (e.g. when launched by systemd).
-            env = os.environ.copy()
-            if 'XDG_RUNTIME_DIR' not in env:
-                uid = os.getuid()
-                env['XDG_RUNTIME_DIR'] = f'/run/user/{uid}'
-            
-            def get_vol():
-                # Try wpctl (PipeWire) first - outputs "Volume: 0.75"
-                try:
-                    out = subprocess.check_output(
-                        ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
-                        text=True, timeout=2, env=env
-                    )
-                    m = re.search(r'Volume:\s+([0-9.]+)', out)
-                    if m:
-                        return round(float(m.group(1)) * 100)
-                except Exception:
-                    pass
-                # Try pactl (PulseAudio)
-                try:
-                    out = subprocess.check_output(
-                        ["pactl", "get-sink-volume", "@DEFAULT_SINK@"],
-                        text=True, timeout=2, env=env
-                    )
-                    m = re.search(r'(\d+)%', out)
-                    if m:
-                        return int(m.group(1))
-                except Exception:
-                    pass
-                # Try amixer
-                try:
-                    out = subprocess.check_output(
-                        ["amixer", "sget", "Master"],
-                        text=True, timeout=2, env=env
-                    )
-                    m = re.search(r'\[(\d+)%\]', out)
-                    if m:
-                        return int(m.group(1))
-                except Exception:
-                    pass
-                return None
-
-            def set_vol(direction):
-                # Try wpctl first
-                try:
-                    arg = "5%+" if direction == "up" else "5%-"
-                    subprocess.run(
-                        ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", arg],
-                        check=True, timeout=2, env=env,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                    return True
-                except Exception:
-                    pass
-                # Try pactl
-                try:
-                    arg = "+5%" if direction == "up" else "-5%"
-                    subprocess.run(
-                        ["pactl", "set-sink-volume", "@DEFAULT_SINK@", arg],
-                        check=True, timeout=2, env=env,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                    return True
-                except Exception:
-                    pass
-                # Try amixer
-                try:
-                    arg = "5%+" if direction == "up" else "5%-"
-                    subprocess.run(
-                        ["amixer", "sset", "Master", arg],
-                        check=True, timeout=2, env=env,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                    return True
-                except Exception:
-                    pass
-                return False
-
             success = False
             if action in ("up", "down"):
-                success = set_vol(action)
+                success = volume.adjust_volume(action)
             elif action == "get":
                 success = True
 
             if success:
-                current_vol = get_vol()
+                current_vol = volume.get_volume()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.end_headers()
