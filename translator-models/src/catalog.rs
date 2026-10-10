@@ -49,7 +49,7 @@ pub fn tts_files(paths: &ModelPaths, keys: &BTreeSet<String>) -> Vec<FileSpec> {
         .collect()
 }
 
-/// Percent-encodes each path segment, as `download.py::cdn_url_for_tts_asset_key` does.
+/// Percent-encodes each path segment, matching the CDN's key layout.
 fn encode_key(key: &str) -> String {
     key.split('/')
         .map(|segment| {
@@ -72,7 +72,14 @@ mod tests {
     use std::collections::BTreeSet;
     use std::path::Path;
 
+    use translator_core::models::GEMMA_FILE_NAME;
+
     use super::*;
+
+    #[test]
+    fn gemma_url_ends_in_the_file_name_the_runtime_loads() {
+        assert!(GEMMA_URL.ends_with(&format!("/{GEMMA_FILE_NAME}")));
+    }
 
     #[test]
     fn gemma_is_pinned_by_commit_and_hash() {

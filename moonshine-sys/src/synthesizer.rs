@@ -5,7 +5,7 @@ use std::sync::Arc;
 use crate::ffi::{MOONSHINE_ERROR_NONE, MOONSHINE_HEADER_VERSION};
 use crate::library::{c_string, free_native, MoonshineError, MoonshineLibrary, OptionArray};
 
-/// A text-to-speech engine for one language. Not `Send` (spec §8.3).
+/// A text-to-speech engine for one language. Not `Send`.
 pub struct Synthesizer {
     library: Arc<MoonshineLibrary>,
     handle: i32,

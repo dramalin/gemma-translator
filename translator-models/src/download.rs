@@ -3,7 +3,7 @@
 //! final path was verified when it was written, so it is never fetched again.
 
 use std::fs::{self, File};
-use std::io::{self, Read, Write};
+use std::io::{self, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -100,7 +100,9 @@ fn download_to(
         .header("Content-Length")
         .and_then(|value| value.trim().parse::<u64>().ok());
 
-    let mut file = File::create(partial).map_err(io_error(partial))?;
+    // Large writes: the socket hands over small chunks, and this file is gigabytes.
+    let mut file =
+        BufWriter::with_capacity(1 << 18, File::create(partial).map_err(io_error(partial))?);
     let mut reader = response.into_reader();
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 1 << 16];
@@ -122,7 +124,8 @@ fn download_to(
         received += read as u64;
         on_progress(received, expected_length);
     }
-    file.sync_all().map_err(io_error(partial))?;
+    file.flush().map_err(io_error(partial))?;
+    file.get_ref().sync_all().map_err(io_error(partial))?;
 
     if let Some(expected) = expected_length {
         if received != expected {

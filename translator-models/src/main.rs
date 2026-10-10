@@ -1,5 +1,5 @@
 //! Downloads every model file `translator` needs into one directory
-//! (spec §8.5). Run at deployment time; the translator never goes online.
+//! Run at deployment time; the translator never goes online.
 
 mod catalog;
 mod download;
@@ -147,7 +147,7 @@ fn collect_tts_keys(
         let dependencies = library
             .tts_dependencies(voice.language_tag, &voice.synthesizer_options(root))
             .map_err(|error| error.to_string())?;
-        // Keys without a '/' are G2P override labels, not files (download.py).
+        // Keys without a '/' are G2P override labels, not files.
         let files: Vec<String> = dependencies
             .into_iter()
             .filter(|key| key.contains('/'))

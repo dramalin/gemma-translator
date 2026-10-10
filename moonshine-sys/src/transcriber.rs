@@ -20,7 +20,7 @@ pub enum ModelArch {
 }
 
 /// A loaded speech-recognition model. Not `Send`: the handle stays on the
-/// thread that created it (spec §8.3).
+/// thread that created it.
 pub struct Transcriber {
     library: Arc<MoonshineLibrary>,
     handle: i32,
