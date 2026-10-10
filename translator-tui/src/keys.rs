@@ -8,7 +8,7 @@ use translator_core::keys::Key;
 
 /// A recording key pressed again this soon after its previous press is OS
 /// auto-repeat.
-pub const REPEAT_WINDOW: Duration = Duration::from_secs(1);
+const REPEAT_WINDOW: Duration = Duration::from_secs(1);
 
 /// Ctrl and Alt combinations are never translator keys (Ctrl-Z would
 /// otherwise start a recording); Shift is allowed.
@@ -40,14 +40,12 @@ pub fn is_quit(event: &KeyEvent) -> bool {
 
 /// Lets through one press per physical press of a recording key.
 pub struct RepeatFilter {
-    window: Duration,
     last_record_press: Option<(Key, Instant)>,
 }
 
 impl RepeatFilter {
-    pub fn new(window: Duration) -> Self {
+    pub fn new() -> Self {
         RepeatFilter {
-            window,
             last_record_press: None,
         }
     }
@@ -64,9 +62,9 @@ impl RepeatFilter {
         if !matches!(key, Key::Z | Key::X) {
             return true;
         }
-        let is_repeat = self
-            .last_record_press
-            .is_some_and(|(last_key, at)| last_key == key && now.duration_since(at) < self.window);
+        let is_repeat = self.last_record_press.is_some_and(|(last_key, at)| {
+            last_key == key && now.duration_since(at) < REPEAT_WINDOW
+        });
         self.last_record_press = Some((key, now));
         !is_repeat
     }
@@ -130,7 +128,7 @@ mod tests {
     #[test]
     fn held_key_stream_is_accepted_once() {
         let start = Instant::now();
-        let mut filter = RepeatFilter::new(REPEAT_WINDOW);
+        let mut filter = RepeatFilter::new();
         assert!(filter.accept(Key::Z, KeyEventKind::Press, start));
         // OS auto-repeat: first repeat after ~500 ms, then every ~33 ms.
         let mut now = start + Duration::from_millis(500);
@@ -145,7 +143,7 @@ mod tests {
     #[test]
     fn non_recording_keys_are_never_filtered() {
         let start = Instant::now();
-        let mut filter = RepeatFilter::new(REPEAT_WINDOW);
+        let mut filter = RepeatFilter::new();
         for step in 0..5 {
             let now = start + Duration::from_millis(33 * step);
             assert!(filter.accept(Key::ArrowRight, KeyEventKind::Press, now));
@@ -161,7 +159,7 @@ mod tests {
     #[test]
     fn releases_and_repeats_are_dropped() {
         let start = Instant::now();
-        let mut filter = RepeatFilter::new(REPEAT_WINDOW);
+        let mut filter = RepeatFilter::new();
         assert!(!filter.accept(Key::Z, KeyEventKind::Release, start));
         assert!(!filter.accept(Key::ArrowLeft, KeyEventKind::Repeat, start));
     }

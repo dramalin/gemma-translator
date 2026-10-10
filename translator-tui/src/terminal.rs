@@ -101,6 +101,23 @@ impl Drop for StderrRedirect {
     }
 }
 
+/// Starts logging fd 2 to `log`, warning on stderr (still the terminal) when
+/// that is not possible.
+pub fn redirect_stderr(log: Option<&Path>) -> Option<StderrRedirect> {
+    let Some(path) = log else {
+        eprintln!("warning: no XDG_STATE_HOME or HOME; library output may garble the screen");
+        return None;
+    };
+    StderrRedirect::to_file(path)
+        .inspect_err(|error| {
+            eprintln!(
+                "warning: cannot log to {} ({error}); library output may garble the screen",
+                path.display()
+            );
+        })
+        .ok()
+}
+
 /// Must be called on the main thread. A panic there restores the terminal
 /// and, while a `StderrRedirect` is alive, the original stderr, then prints
 /// the message and the log path. Panics on other threads (JobRunner catches

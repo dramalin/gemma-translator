@@ -16,10 +16,10 @@ use translator_app::cli::{load_config, parse_args};
 use translator_app::{AppState, KeyAction, RecordStyle};
 use translator_core::config::Config;
 
-use crate::keys::{is_quit, key_from_event, RepeatFilter, REPEAT_WINDOW};
+use crate::keys::{is_quit, key_from_event, RepeatFilter};
 use crate::terminal::{
     enter, install_panic_hook, install_quit_signals, is_quit_requested, is_truecolor,
-    is_usable_term, leave, log_path, StderrRedirect, Tui,
+    is_usable_term, leave, log_path, redirect_stderr, Tui,
 };
 
 const USAGE: &str = "usage: translator-tui [--mock] [--config <path>] [--model-dir <path>]";
@@ -45,22 +45,7 @@ fn main() -> ExitCode {
     };
 
     let log = log_path(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME"));
-    let redirect = match &log {
-        Some(path) => match StderrRedirect::to_file(path) {
-            Ok(redirect) => Some(redirect),
-            Err(error) => {
-                eprintln!(
-                    "warning: cannot log to {} ({error}); library output may garble the screen",
-                    path.display()
-                );
-                None
-            }
-        },
-        None => {
-            eprintln!("warning: no XDG_STATE_HOME or HOME; library output may garble the screen");
-            None
-        }
-    };
+    let redirect = redirect_stderr(log.as_deref());
     install_panic_hook(log.clone());
     install_quit_signals();
     let is_truecolor = is_truecolor(std::env::var("COLORTERM").ok().as_deref());
@@ -86,10 +71,10 @@ fn main() -> ExitCode {
     let result = run(&mut terminal, &mut state, is_truecolor);
     leave();
     drop(terminal);
-    let is_logging = redirect.is_some();
+    let logged_to = redirect.is_some().then_some(log.as_deref()).flatten();
+    // Put stderr back before printing anything to it below.
     drop(redirect);
-
-    if let (true, Some(path)) = (is_logging, &log) {
+    if let Some(path) = logged_to {
         let _ = writeln!(io::stdout(), "log: {}", path.display());
     }
     match result {
@@ -122,7 +107,7 @@ fn spawn_event_reader() -> io::Result<Receiver<io::Result<Event>>> {
 
 fn run(terminal: &mut Tui, state: &mut AppState, is_truecolor: bool) -> io::Result<()> {
     let events = spawn_event_reader()?;
-    let mut filter = RepeatFilter::new(REPEAT_WINDOW);
+    let mut filter = RepeatFilter::new();
     while !is_quit_requested() {
         let view = state.view();
         terminal.draw(|frame| render::draw(frame, &view, is_truecolor))?;

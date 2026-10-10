@@ -10,10 +10,11 @@ use translator_core::controller::Phase;
 use translator_core::keys::KeyboardMode;
 use translator_core::lane::Lane;
 
-pub const MIN_WIDTH: u16 = 40;
-pub const MIN_HEIGHT: u16 = 12;
+const MIN_WIDTH: u16 = 40;
+const MIN_HEIGHT: u16 = 12;
 const BAR_GLYPHS: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 const SETTINGS_WIDTH: u16 = 36;
+const SETTINGS_HINT: &str = "↑/↓ choose  ←/→ change  Esc close";
 
 /// `is_truecolor`: the terminal takes 24-bit colour (`COLORTERM`).
 pub fn draw(frame: &mut Frame, view: &AppView, is_truecolor: bool) {
@@ -195,7 +196,7 @@ fn status_line(view: &AppView, accent: Color, width: u16) -> Paragraph<'static> 
 /// columns together with the status word.
 fn status_hint(view: &AppView) -> &'static str {
     if view.is_settings_open {
-        return "↑/↓ choose  ←/→ change  Esc close";
+        return SETTINGS_HINT;
     }
     match (view.phase, view.keyboard_mode) {
         (Phase::Recording(Lane::Two), KeyboardMode::Vertical) => "X again to stop",
@@ -221,13 +222,14 @@ fn draw_settings(frame: &mut Frame, area: Rect, rows: &[SettingsRowView], accent
         .iter()
         .map(|row| {
             let text = format!(" {:<16}{:>16} ", row.label, row.value);
-            if row.is_selected {
-                Line::styled(text, Style::new().fg(Color::Black).bg(accent))
+            let style = if row.is_selected {
+                Style::new().fg(Color::Black).bg(accent)
             } else {
-                Line::styled(text, Style::new().fg(accent))
-            }
+                Style::new().fg(accent)
+            };
+            Line::styled(text, style)
         })
-        .chain([Line::raw(" ↑/↓ choose  ←/→ change  Esc close")])
+        .chain([Line::raw(format!(" {SETTINGS_HINT}"))])
         .collect();
     frame.render_widget(Clear, popup);
     frame.render_widget(
@@ -469,5 +471,11 @@ mod tests {
         assert_eq!(accent_color(ThemeColor::Green.rgb(), false), Color::Green);
         assert_eq!(accent_color(ThemeColor::Yellow.rgb(), false), Color::Yellow);
         assert_eq!(accent_color(ThemeColor::White.rgb(), false), Color::White);
+        // A theme colour missing from the fallback table would render white.
+        for color in ThemeColor::ALL {
+            if color != ThemeColor::White {
+                assert_ne!(accent_color(color.rgb(), false), Color::White, "{color:?}");
+            }
+        }
     }
 }
