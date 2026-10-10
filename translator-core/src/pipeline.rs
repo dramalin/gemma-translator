@@ -14,24 +14,6 @@ pub struct AudioClip {
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum PipelineError {
-    #[error("cannot reach {service}: {message}")]
-    Unreachable {
-        service: &'static str,
-        message: String,
-    },
-    #[error("{service} returned HTTP {status}: {message}")]
-    Service {
-        service: &'static str,
-        status: u16,
-        message: String,
-    },
-    #[error("invalid response from {service}: {message}")]
-    InvalidResponse {
-        service: &'static str,
-        message: String,
-    },
-    #[error("{service} did not answer within {seconds} s")]
-    TimedOut { service: &'static str, seconds: u64 },
     #[error("{service} failed: {message}")]
     Engine {
         service: &'static str,

@@ -331,7 +331,7 @@ fn empty_transcript_stops_after_transcription() {
 
 #[test]
 fn transcription_errors_are_reported() {
-    let error = PipelineError::Unreachable {
+    let error = PipelineError::Engine {
         service: "speech service",
         message: "refused".to_string(),
     };
@@ -369,9 +369,8 @@ fn a_panicking_service_fails_the_job() {
 
 #[test]
 fn speech_error_ends_the_job_while_translation_is_still_running() {
-    let error = PipelineError::Service {
+    let error = PipelineError::Engine {
         service: "speech service",
-        status: 500,
         message: "tts".to_string(),
     };
     let (translator, started, exited) = blocking_translator(vec!["Hola."]);
@@ -446,7 +445,7 @@ fn starting_a_new_job_cancels_the_previous_one() {
 
 #[test]
 fn translation_error_stops_speaking_the_sentences_already_sent() {
-    let error = PipelineError::Unreachable {
+    let error = PipelineError::Engine {
         service: "LLM",
         message: "reset".to_string(),
     };
