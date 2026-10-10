@@ -44,15 +44,33 @@ if litert-lm list 2>/dev/null | awk -v m="$MODEL_NAME" '$1 == m { found = 1 } EN
     exit 0
 fi
 
-# The download needs ~2.6GB for the Hugging Face cache plus ~2.6GB for the
-# imported copy; require headroom before starting a multi-GB download.
-REQUIRED_GB=6
+# make models already downloads the same file into the model directory;
+# import that copy instead of downloading it a second time.
+LOCAL_MODEL="${MODEL_DIR:-models}/gemma/$MODEL_FILE"
+
+# Importing copies ~2.6GB; downloading first needs another ~2.6GB for the
+# Hugging Face cache. Require headroom before starting.
+if [ -f "$LOCAL_MODEL" ]; then
+    REQUIRED_GB=3
+else
+    REQUIRED_GB=6
+fi
 AVAIL_GB="$(df -Pk "$HOME" | awk 'NR==2 { print int($4 / 1024 / 1024) }')"
 if [ -n "$AVAIL_GB" ] && [ "$AVAIL_GB" -lt "$REQUIRED_GB" ]; then
     echo "Error: only ${AVAIL_GB}GB free on the filesystem holding $HOME."
-    echo "At least ${REQUIRED_GB}GB is needed to download and import the model."
+    echo "At least ${REQUIRED_GB}GB is needed to import the model."
     echo "Free up space and re-run this script."
     exit 1
+fi
+
+if [ -f "$LOCAL_MODEL" ]; then
+    echo "Importing $LOCAL_MODEL as '$MODEL_NAME'..."
+    litert-lm import "$LOCAL_MODEL" "$MODEL_NAME"
+    echo "========================================="
+    echo "Model import complete!"
+    echo "You can now start the server with ./start.sh"
+    echo "========================================="
+    exit 0
 fi
 
 echo "Model '$MODEL_NAME' not found in local storage."
