@@ -1,4 +1,4 @@
-//! Spec §3.1: which Moonshine model and voice each language uses, and where
+//! Which Moonshine model and voice each language uses, and where
 //! `translator-models` puts every model file. Single source for the native
 //! inference path and the model tool.
 
@@ -34,7 +34,7 @@ pub struct TtsVoice {
     pub voice: Option<&'static str>,
 }
 
-/// Components of a non-streaming model (`download.py::get_components_for_model_info`).
+/// Components of a non-streaming model, as Moonshine publishes them.
 const NON_STREAMING_COMPONENTS: &[&str] = &[
     "encoder_model.ort",
     "decoder_model_merged.ort",
@@ -42,7 +42,7 @@ const NON_STREAMING_COMPONENTS: &[&str] = &[
 ];
 
 /// Components of the English streaming model, including the attention decoder
-/// that `download.py` adds for English.
+/// that only the English model has.
 const ENGLISH_STREAMING_COMPONENTS: &[&str] = &[
     "adapter.ort",
     "cross_kv.ort",
@@ -57,7 +57,7 @@ const ENGLISH_STREAMING_COMPONENTS: &[&str] = &[
 /// Moonshine stops decoding after this many tokens per second of audio. Its
 /// default suits alphabetic scripts, but a CJK character takes several
 /// byte-level tokens, so the default cuts ja/zh/ko sentences short; 13 was
-/// measured to end the truncation. The value was first found with the old Python backend.
+/// measured to end the truncation.
 ///
 /// `vad_threshold` 0 turns off Moonshine's own voice activity detection, so
 /// the whole recording is one segment. Its VAD keeps state from earlier calls,
@@ -184,7 +184,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_language_has_an_stt_model_matching_moonshine_download_py() {
+    fn every_language_has_an_stt_model() {
         let ko = LanguageCode::Ko.stt_model();
         assert_eq!(ko.name, "tiny-ko");
         assert_eq!(ko.arch, SttModelArch::Tiny);

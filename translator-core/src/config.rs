@@ -11,7 +11,7 @@ pub const VISUALIZER_BARS_MIN: u32 = 8;
 pub const VISUALIZER_BARS_MAX: u32 = 128;
 pub const VISUALIZER_BARS_STEP: u32 = 8;
 
-/// The six UI accent colors offered by the old settings panel.
+/// The six UI accent colors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum ThemeColor {
@@ -33,17 +33,6 @@ impl ThemeColor {
         ThemeColor::Green,
         ThemeColor::Orange,
     ];
-
-    pub fn hex(self) -> &'static str {
-        match self {
-            ThemeColor::Red => "#ff4444",
-            ThemeColor::White => "#ffffff",
-            ThemeColor::Yellow => "#ffeb3b",
-            ThemeColor::Blue => "#2196f3",
-            ThemeColor::Green => "#4caf50",
-            ThemeColor::Orange => "#ffa500",
-        }
-    }
 
     pub fn name(self) -> &'static str {
         match self {
@@ -68,16 +57,11 @@ impl ThemeColor {
     }
 
     pub fn cycled(self, direction: RotateDirection) -> ThemeColor {
-        let count = ThemeColor::ALL.len();
         let index = ThemeColor::ALL
             .iter()
             .position(|color| *color == self)
             .expect("ALL lists every variant");
-        let next = match direction {
-            RotateDirection::Next => (index + 1) % count,
-            RotateDirection::Previous => (index + count - 1) % count,
-        };
-        ThemeColor::ALL[next]
+        ThemeColor::ALL[direction.wrap(index, ThemeColor::ALL.len())]
     }
 }
 
@@ -87,14 +71,15 @@ impl TryFrom<String> for ThemeColor {
     fn try_from(value: String) -> Result<Self, Self::Error> {
         ThemeColor::ALL
             .into_iter()
-            .find(|color| color.hex().eq_ignore_ascii_case(&value))
+            .find(|color| String::from(*color).eq_ignore_ascii_case(&value))
             .ok_or_else(|| format!("unknown theme color {value}"))
     }
 }
 
 impl From<ThemeColor> for String {
     fn from(color: ThemeColor) -> String {
-        color.hex().to_string()
+        let (red, green, blue) = color.rgb();
+        format!("#{red:02x}{green:02x}{blue:02x}")
     }
 }
 

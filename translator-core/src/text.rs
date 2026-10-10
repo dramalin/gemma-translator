@@ -1,6 +1,7 @@
 use crate::language::LanguageCode;
 
-/// Upper bound for one synthesized speech chunk, as in the old UI.
+/// Upper bound for one synthesized speech chunk; longer sentences are split
+/// at whitespace (or mid-word for CJK).
 pub const MAX_SPEECH_CHUNK_CHARS: usize = 180;
 
 const ALWAYS_TERMINATES: [char; 5] = ['。', '！', '？', '؟', '\n'];
@@ -189,11 +190,10 @@ fn push_trimmed(sentences: &mut Vec<String>, text: &str) {
 /// between characters go first, so the repetition check counts characters
 /// rather than characters and spaces.
 pub fn clean_transcript(text: &str, language: LanguageCode) -> String {
-    match language {
-        LanguageCode::Zh | LanguageCode::Ja => {
-            drop_trailing_repetition(&remove_cjk_spaces(text)).to_string()
-        }
-        _ => drop_trailing_repetition(text).to_string(),
+    if language.is_unspaced_cjk() {
+        drop_trailing_repetition(&remove_cjk_spaces(text)).to_string()
+    } else {
+        drop_trailing_repetition(text).to_string()
     }
 }
 

@@ -216,7 +216,7 @@ impl Controller {
             }
             JobEvent::SentenceTranslated { sentence, .. } => {
                 if self.has_translation {
-                    if !joins_without_space(job.target) {
+                    if !job.target.is_unspaced_cjk() {
                         self.transcript.translation.push(' ');
                     }
                     self.transcript.translation.push_str(&sentence);
@@ -352,11 +352,6 @@ impl Controller {
         self.current_job = None;
         self.phase = Phase::Idle;
     }
-}
-
-/// Chinese and Japanese sentences are concatenated without spaces.
-fn joins_without_space(language: LanguageCode) -> bool {
-    matches!(language, LanguageCode::Zh | LanguageCode::Ja)
 }
 
 #[cfg(test)]

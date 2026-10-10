@@ -63,9 +63,8 @@ fn settings_row(row: &SettingsRowView) -> SettingsRow {
     }
 }
 
-/// Replaces the model's rows only when they differ, so Slint does not redo
-/// the list for unchanged contents on every frame.
-/// Clones `rows` into the model only when they differ from what it holds.
+/// Replaces the model's rows (cloning `rows`) only when they differ, so Slint
+/// does not redo the list for unchanged contents on every frame.
 fn set_if_changed<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: &[T]) {
     let is_changed = model.row_count() != rows.len()
         || model.iter().zip(rows).any(|(current, row)| current != *row);

@@ -57,14 +57,26 @@ pub enum Command {
     ToggleSettings,
 }
 
+/// The lane a recording key records for, if `key` is one.
+fn recording_lane(mode: KeyboardMode, key: Key, active_lane: Lane) -> Option<Lane> {
+    match (mode, key) {
+        (KeyboardMode::Landscape, Key::Z) => Some(active_lane),
+        (KeyboardMode::Vertical, Key::Z) => Some(Lane::One),
+        (KeyboardMode::Vertical, Key::X) => Some(Lane::Two),
+        _ => None,
+    }
+}
+
 pub fn command_for_key_press(mode: KeyboardMode, key: Key, active_lane: Lane) -> Option<Command> {
     if key == Key::Escape {
         return Some(Command::ToggleSettings);
     }
+    if let Some(lane) = recording_lane(mode, key, active_lane) {
+        return Some(Command::StartRecording(lane));
+    }
     match mode {
         KeyboardMode::Landscape => match key {
             Key::Space => Some(Command::ToggleActiveLane),
-            Key::Z => Some(Command::StartRecording(active_lane)),
             Key::ArrowLeft => Some(Command::RotateLanguage(
                 active_lane,
                 RotateDirection::Previous,
@@ -73,8 +85,6 @@ pub fn command_for_key_press(mode: KeyboardMode, key: Key, active_lane: Lane) ->
             _ => None,
         },
         KeyboardMode::Vertical => match key {
-            Key::Z => Some(Command::StartRecording(Lane::One)),
-            Key::X => Some(Command::StartRecording(Lane::Two)),
             Key::ArrowLeft => Some(Command::RotateLanguage(
                 Lane::One,
                 RotateDirection::Previous,
@@ -91,12 +101,7 @@ pub fn command_for_key_press(mode: KeyboardMode, key: Key, active_lane: Lane) ->
 }
 
 pub fn command_for_key_release(mode: KeyboardMode, key: Key, active_lane: Lane) -> Option<Command> {
-    match (mode, key) {
-        (KeyboardMode::Landscape, Key::Z) => Some(Command::StopRecording(active_lane)),
-        (KeyboardMode::Vertical, Key::Z) => Some(Command::StopRecording(Lane::One)),
-        (KeyboardMode::Vertical, Key::X) => Some(Command::StopRecording(Lane::Two)),
-        _ => None,
-    }
+    recording_lane(mode, key, active_lane).map(Command::StopRecording)
 }
 
 /// Toggle-style recording for terminals, which do not report key releases:
@@ -108,13 +113,7 @@ pub fn command_for_key_toggle(
     active_lane: Lane,
     phase: Phase,
 ) -> Option<Command> {
-    let recording_key_lane = match (mode, key) {
-        (KeyboardMode::Landscape, Key::Z) => Some(active_lane),
-        (KeyboardMode::Vertical, Key::Z) => Some(Lane::One),
-        (KeyboardMode::Vertical, Key::X) => Some(Lane::Two),
-        _ => None,
-    };
-    match recording_key_lane {
+    match recording_lane(mode, key, active_lane) {
         Some(lane) if phase == Phase::Recording(lane) => Some(Command::StopRecording(lane)),
         Some(lane) => Some(Command::StartRecording(lane)),
         None => command_for_key_press(mode, key, active_lane),

@@ -18,8 +18,18 @@ pub enum RotateDirection {
     Next,
 }
 
+impl RotateDirection {
+    /// The index one step from `index` in a ring of `count` entries.
+    pub fn wrap(self, index: usize, count: usize) -> usize {
+        match self {
+            RotateDirection::Next => (index + 1) % count,
+            RotateDirection::Previous => (index + count - 1) % count,
+        }
+    }
+}
+
 impl LanguageCode {
-    /// Revolver order, identical to `AVAILABLE_LANGUAGES` in the old React UI.
+    /// Revolver order.
     pub const ALL: [LanguageCode; 6] = [
         LanguageCode::Ar,
         LanguageCode::En,
@@ -71,6 +81,11 @@ impl LanguageCode {
         matches!(self, LanguageCode::Ar)
     }
 
+    /// Chinese and Japanese are written without spaces between words.
+    pub fn is_unspaced_cjk(self) -> bool {
+        matches!(self, LanguageCode::Zh | LanguageCode::Ja)
+    }
+
     fn index(self) -> usize {
         LanguageCode::ALL
             .iter()
@@ -87,13 +102,9 @@ pub fn rotate_language(
     direction: RotateDirection,
 ) -> LanguageCode {
     let count = LanguageCode::ALL.len();
-    let step = match direction {
-        RotateDirection::Previous => count - 1,
-        RotateDirection::Next => 1,
-    };
-    let mut index = (current.index() + step) % count;
+    let mut index = direction.wrap(current.index(), count);
     if LanguageCode::ALL[index] == other {
-        index = (index + step) % count;
+        index = direction.wrap(index, count);
     }
     LanguageCode::ALL[index]
 }
@@ -111,7 +122,7 @@ mod tests {
     }
 
     #[test]
-    fn revolver_order_matches_old_ui() {
+    fn revolver_order_is_fixed() {
         let codes: Vec<&str> = LanguageCode::ALL.iter().map(|l| l.code()).collect();
         assert_eq!(codes, ["ar", "en", "es", "ja", "zh", "ko"]);
     }

@@ -46,11 +46,11 @@ impl SettingsCursor {
         let count = SettingsItem::ALL.len();
         match key {
             Key::ArrowUp => {
-                self.index = (self.index + count - 1) % count;
+                self.index = RotateDirection::Previous.wrap(self.index, count);
                 None
             }
             Key::ArrowDown => {
-                self.index = (self.index + 1) % count;
+                self.index = RotateDirection::Next.wrap(self.index, count);
                 None
             }
             Key::ArrowLeft => Some(self.action(RotateDirection::Previous)),
