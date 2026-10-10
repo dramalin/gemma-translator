@@ -24,6 +24,7 @@ Offline, on-device voice translator (target: Raspberry Pi 5 8GB with a 480x320 k
 cd frontend
 npm run dev | npm run build | npm run format   # format uses oxfmt
 make test               # Rust workspace tests + backend/test_*.py
+make setup              # check system tools, fetch venv/native libs/models/node_modules (SETUP_ARGS=--yes)
 make run-mock           # Rust/Slint UI with mock services
 make run-tui            # Rust terminal UI (ARGS=--mock for mock services)
 make native-libs        # fetch pinned libmoonshine / liblitert-lm into native/<arch>/lib
@@ -66,6 +67,7 @@ Frontend:
 - `translator-models`: downloads Gemma, the Moonshine STT models and TTS assets into `model_dir` (layout in `translator-core/src/models.rs`).
 - `inference_backend = "native"` in the config switches the UI from the HTTP services to the native ones. Native tests are `#[ignore]`d: `make native-libs models test-ffi`.
 - `make native-libs` needs `patchelf` (it sets the RUNPATH on the fetched `.so` files). The native libraries print log lines into `make test-ffi` output, so count results from the `test result:` lines only.
+- macOS (Apple Silicon, macOS 15+): the libraries are `.dylib` files that carry an `@loader_path` rpath, so no patchelf; volume goes through `osascript`; `start.sh` must stay bash 3.2-compatible (no `wait -n`).
 - Agents cannot inject key presses into the Slint window on Wayland; check Slint key handling by hand. The TUI can be smoke-tested in a pty with `--mock`: closing the pty master must exit within ~30 ms with no stray process.
 - TUI: don't use `ratatui::init()`/`restore()` (their panic hook fires on job threads; use `terminal::enter`/`leave`), and never `writeln!(...).unwrap()`/`println!` to the tty: a dead tty aborts the process, so use `let _ = writeln!`.
 

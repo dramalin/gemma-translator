@@ -17,7 +17,7 @@ https://github.com/user-attachments/assets/343072ce-dc78-44a7-a783-99312845cabe
 
 - Python 3.10+
 - Node.js 18+ (20 LTS recommended) & npm — installed automatically by `deploy-pi.sh` on Raspberry Pi OS / Debian
-- Linux or macOS
+- Linux, or macOS 15+ on Apple Silicon (see [macOS](#macos-apple-silicon))
 
 ## Required Hardware
 
@@ -29,6 +29,13 @@ https://github.com/user-attachments/assets/343072ce-dc78-44a7-a783-99312845cabe
 <img width="3024" height="1672" src="https://storage.googleapis.com/experiments-uploads/gemma-translator/gemma-translator-cad.gif" />
 
 ## Setup Instructions
+
+`make setup` checks the system tools, then creates `venv/`, fetches the native
+libraries and models, imports Gemma for `litert-lm serve` and installs the
+frontend packages, skipping anything already there. It prints the install
+command for any missing tool instead of installing it; `make setup
+SETUP_ARGS=--yes` downloads the ~3.8 GB of models without asking. The steps
+below do the same by hand.
 
 1. **Make Scripts Executable**
    Ensure the setup, download, start, and deployment scripts have execute permissions:
@@ -114,7 +121,7 @@ The `translator` binary can run speech recognition, translation and speech
 synthesis itself, without `server.py` or `litert-lm serve`:
 
 ```bash
-sudo apt-get install -y patchelf unzip libvulkan1
+sudo apt-get install -y patchelf unzip libvulkan1   # Linux; macOS needs none of these
 make native-libs     # pinned libmoonshine / liblitert-lm into native/<arch>/lib
 make models          # ~3.8 GB of models into ./models (MODEL_DIR=... to change)
 make test-ffi        # FFI tests against those libraries and models
@@ -129,6 +136,26 @@ model_dir = "/path/to/models"
 
 and start it with `make run-native`. The libraries are loaded from `lib/`
 next to the executable. `make test-soak` runs the long memory test.
+
+## macOS (Apple Silicon)
+
+Needs macOS 15 or later on an M-series Mac (moonshine-voice publishes no
+Intel macOS build) and the Xcode Command Line Tools
+(`xcode-select --install`); Homebrew is the easiest way to get Python 3.12
+and Node.js.
+
+```bash
+make setup           # lists anything missing, then fetches the rest
+make run-native      # Slint window, in-process inference
+make run-tui         # terminal UI (set inference_backend in the config)
+./start.sh           # Python backend + React UI on http://localhost:5173
+```
+
+The native libraries are the `.dylib` files from the pinned macOS wheels in
+`native/arm64/lib`. Volume keys change the system output volume through
+`osascript`. The first recording asks whether your terminal app may use the
+microphone; if it was denied, enable it under System Settings → Privacy &
+Security → Microphone and restart the terminal.
 
 ## Project Structure
 
