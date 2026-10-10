@@ -1,10 +1,11 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use translator_core::pipeline::AudioClip;
 
 use crate::audio_convert::resample_linear;
+use crate::sync::lock;
 
 /// Where synthesized speech and UI sounds go.
 pub trait PlaybackSink: Send + Sync {
@@ -41,7 +42,7 @@ impl PlaybackQueue {
     }
 
     fn lock(&self) -> MutexGuard<'_, VecDeque<f32>> {
-        self.samples.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.samples)
     }
 }
 

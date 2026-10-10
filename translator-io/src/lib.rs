@@ -7,4 +7,5 @@ pub mod chinese_script;
 pub mod native;
 pub mod playback_queue;
 pub mod runner;
+mod sync;
 pub mod volume;

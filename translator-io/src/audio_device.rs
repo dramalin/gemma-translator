@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -8,6 +8,7 @@ use translator_core::pipeline::STT_SAMPLE_RATE;
 
 use crate::audio_convert::{downmix_to_mono, resample_linear};
 use crate::playback_queue::PlaybackQueue;
+use crate::sync::lock;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AudioError {
@@ -21,10 +22,6 @@ pub enum AudioError {
 
 fn device_error(error: impl ToString) -> AudioError {
     AudioError::Device(error.to_string())
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Output samples (all channels) reserved for the mix buffer up front; larger
@@ -182,7 +179,8 @@ impl AudioRecorder {
         let previous = buffer.tail.take();
         buffer.is_capturing = true;
         buffer.started_at = Some(Instant::now());
-        drop(buffer);
+        // Hand the samples over before releasing `buffer`: `Tail::finish`
+        // checks `buffer.tail` and then `take`, and must find them in one of the two.
         if let Some(take) = previous {
             *lock(&take.0) = Some(finished);
         }

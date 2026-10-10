@@ -5,7 +5,7 @@
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -14,6 +14,7 @@ use translator_core::pipeline::{SpeechToText, TextToSpeech, Translator};
 
 use crate::chinese_script::{displayed_transcript, spoken_text};
 use crate::playback_queue::PlaybackSink;
+use crate::sync::lock;
 
 const PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
@@ -73,20 +74,14 @@ impl JobRunner {
 
     /// Stops the job (if it is the active one) and drops queued audio.
     pub fn cancel(&self, job: JobId) {
-        let mut active = lock(&self.active_job);
-        if active.as_ref().is_some_and(|(id, _)| *id == job) {
-            if let Some((_, cancel)) = active.take() {
-                cancel.store(true, Ordering::SeqCst);
-            }
+        let cancelled = lock(&self.active_job).take_if(|(id, _)| *id == job);
+        if let Some((_, cancel)) = cancelled {
+            cancel.store(true, Ordering::SeqCst);
         }
         // Must follow the store above: `enqueue_unless_cancelled` relies on the
         // flag being set before the clear so no clip of this job survives it.
         self.playback.clear();
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Runs the job and turns a panic in a service into `JobEvent::Failed`,
