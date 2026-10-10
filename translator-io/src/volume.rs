@@ -9,6 +9,8 @@ use translator_core::language::RotateDirection;
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(2);
 const COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const VOLUME_STEP_PERCENT: u16 = 5;
+const MACOS_GET_VOLUME_SCRIPT: &str = "output volume of (get volume settings)";
 
 /// Runs an external program and returns its stdout, or `None` when the program
 /// is missing, fails or times out.
@@ -28,7 +30,7 @@ impl CommandRunner for SystemCommandRunner {
             .stderr(Stdio::null());
         // PipeWire's wpctl finds its socket through XDG_RUNTIME_DIR, which systemd
         // services may lack.
-        if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
+        if cfg!(target_os = "linux") && std::env::var_os("XDG_RUNTIME_DIR").is_none() {
             if let Ok(metadata) = std::fs::metadata("/proc/self") {
                 command.env("XDG_RUNTIME_DIR", format!("/run/user/{}", metadata.uid()));
             }
@@ -62,17 +64,65 @@ impl CommandRunner for SystemCommandRunner {
     }
 }
 
-/// System output volume via wpctl (PipeWire), then pactl (PulseAudio), then amixer (ALSA).
+/// Which system tools control the output volume.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum VolumePlatform {
+    /// wpctl (PipeWire), then pactl (PulseAudio), then amixer (ALSA).
+    Linux,
+    /// AppleScript's `output volume` through osascript.
+    MacOs,
+}
+
+/// System output volume: osascript on macOS; wpctl, pactl, then amixer elsewhere.
 pub struct VolumeControl<R: CommandRunner> {
     runner: R,
+    platform: VolumePlatform,
 }
 
 impl<R: CommandRunner> VolumeControl<R> {
     pub fn new(runner: R) -> Self {
-        VolumeControl { runner }
+        let platform = if cfg!(target_os = "macos") {
+            VolumePlatform::MacOs
+        } else {
+            VolumePlatform::Linux
+        };
+        VolumeControl { runner, platform }
     }
 
     pub fn current_percent(&self) -> Option<u16> {
+        match self.platform {
+            VolumePlatform::Linux => self.linux_percent(),
+            VolumePlatform::MacOs => self.macos_percent(),
+        }
+    }
+
+    /// Steps the volume by 5 % without going past 0–100 % and returns the new level.
+    pub fn adjust(&self, direction: RotateDirection) -> Option<u16> {
+        match self.platform {
+            VolumePlatform::Linux => self.adjust_linux(direction),
+            VolumePlatform::MacOs => self.adjust_macos(direction),
+        }
+    }
+
+    fn macos_percent(&self) -> Option<u16> {
+        self.runner
+            .run("osascript", &["-e", MACOS_GET_VOLUME_SCRIPT])
+            .and_then(|output| parse_osascript_volume(&output))
+    }
+
+    fn adjust_macos(&self, direction: RotateDirection) -> Option<u16> {
+        let current = self.macos_percent()?;
+        let target = if direction == RotateDirection::Next {
+            (current + VOLUME_STEP_PERCENT).min(100)
+        } else {
+            current.saturating_sub(VOLUME_STEP_PERCENT)
+        };
+        let script = format!("set volume output volume {target}");
+        self.runner.run("osascript", &["-e", &script])?;
+        self.macos_percent()
+    }
+
+    fn linux_percent(&self) -> Option<u16> {
         self.runner
             .run("wpctl", &["get-volume", "@DEFAULT_AUDIO_SINK@"])
             .and_then(|output| parse_wpctl_volume(&output))
@@ -88,8 +138,7 @@ impl<R: CommandRunner> VolumeControl<R> {
             })
     }
 
-    /// Steps the volume by 5 % without going past 100 % and returns the new level.
-    pub fn adjust(&self, direction: RotateDirection) -> Option<u16> {
+    fn adjust_linux(&self, direction: RotateDirection) -> Option<u16> {
         let is_up = direction == RotateDirection::Next;
         let wpctl_step = if is_up { "5%+" } else { "5%-" };
         let pactl_step = if is_up { "+5%" } else { "-5%" };
@@ -111,12 +160,12 @@ impl<R: CommandRunner> VolumeControl<R> {
             .iter()
             .find(|(program, args)| self.runner.run(program, args).is_some())
             .map(|(program, _)| *program)?;
-        let percent = self.current_percent();
+        let percent = self.linux_percent();
         // wpctl caps itself (-l) and amixer stops at its maximum; pactl does not.
         if changed_with == "pactl" && percent.is_some_and(|percent| percent > 100) {
             self.runner
                 .run("pactl", &["set-sink-volume", "@DEFAULT_SINK@", "100%"])?;
-            return self.current_percent();
+            return self.linux_percent();
         }
         percent
     }
@@ -133,10 +182,13 @@ pub struct VolumeWorker {
 impl VolumeWorker {
     /// Starts the thread, which first reads the current volume.
     pub fn spawn<R: CommandRunner + Send + 'static>(runner: R) -> Self {
+        Self::spawn_control(VolumeControl::new(runner))
+    }
+
+    fn spawn_control<R: CommandRunner + Send + 'static>(control: VolumeControl<R>) -> Self {
         let (adjustments, adjustment_receiver) = mpsc::channel();
         let (reading_sender, readings) = mpsc::channel();
         thread::spawn(move || {
-            let control = VolumeControl::new(runner);
             if reading_sender.send(control.current_percent()).is_err() {
                 return;
             }
@@ -169,6 +221,15 @@ fn parse_wpctl_volume(output: &str) -> Option<u16> {
     let value = output.split("Volume:").nth(1)?.split_whitespace().next()?;
     let fraction: f32 = value.parse().ok()?;
     Some((fraction * 100.0).round() as u16)
+}
+
+/// "75\n" → 75; "missing value" (no output device) → None
+fn parse_osascript_volume(output: &str) -> Option<u16> {
+    output
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|percent| *percent <= 100)
 }
 
 /// "... / 75% / ..." → 75
@@ -220,11 +281,98 @@ mod tests {
         }
     }
 
+    fn linux_control<R: CommandRunner>(runner: R) -> VolumeControl<R> {
+        VolumeControl {
+            runner,
+            platform: VolumePlatform::Linux,
+        }
+    }
+
+    fn macos_control<R: CommandRunner>(runner: R) -> VolumeControl<R> {
+        VolumeControl {
+            runner,
+            platform: VolumePlatform::MacOs,
+        }
+    }
+
+    const OSASCRIPT_GET: &str = "osascript -e output volume of (get volume settings)";
+
+    #[test]
+    fn parses_osascript_volume() {
+        assert_eq!(parse_osascript_volume("75\n"), Some(75));
+        assert_eq!(parse_osascript_volume("0"), Some(0));
+        assert_eq!(parse_osascript_volume("100\n"), Some(100));
+        assert_eq!(parse_osascript_volume("missing value\n"), None);
+        assert_eq!(parse_osascript_volume(""), None);
+        assert_eq!(parse_osascript_volume("101"), None);
+    }
+
+    #[test]
+    fn macos_reads_osascript() {
+        let control = macos_control(FakeRunner::with(&[(OSASCRIPT_GET, "75\n")]));
+        assert_eq!(control.current_percent(), Some(75));
+    }
+
+    #[test]
+    fn macos_adjust_up_clamps_at_one_hundred() {
+        let control = macos_control(FakeRunner::with(&[
+            (OSASCRIPT_GET, "98\n"),
+            ("osascript -e set volume output volume 100", ""),
+        ]));
+        // The fake keeps answering 98; the set command proves the clamp.
+        assert_eq!(control.adjust(RotateDirection::Next), Some(98));
+        let calls = control.runner.calls.lock().unwrap().clone();
+        assert_eq!(
+            calls,
+            [
+                OSASCRIPT_GET,
+                "osascript -e set volume output volume 100",
+                OSASCRIPT_GET
+            ]
+        );
+    }
+
+    #[test]
+    fn macos_adjust_down_clamps_at_zero() {
+        let control = macos_control(FakeRunner::with(&[
+            (OSASCRIPT_GET, "3\n"),
+            ("osascript -e set volume output volume 0", ""),
+        ]));
+        control.adjust(RotateDirection::Previous);
+        let calls = control.runner.calls.lock().unwrap().clone();
+        assert!(calls.contains(&"osascript -e set volume output volume 0".to_string()));
+    }
+
+    #[test]
+    fn macos_unknown_volume_sets_nothing() {
+        let control = macos_control(FakeRunner::with(&[(OSASCRIPT_GET, "missing value\n")]));
+        assert_eq!(control.adjust(RotateDirection::Next), None);
+        let calls = control.runner.calls.lock().unwrap().clone();
+        assert_eq!(calls, [OSASCRIPT_GET]);
+    }
+
+    #[test]
+    fn macos_failed_set_gives_none() {
+        let control = macos_control(FakeRunner::with(&[(OSASCRIPT_GET, "50\n")]));
+        assert_eq!(control.adjust(RotateDirection::Next), None);
+    }
+
+    #[test]
+    fn new_picks_the_build_platform() {
+        let control = VolumeControl::new(FakeRunner::default());
+        let expected = if cfg!(target_os = "macos") {
+            VolumePlatform::MacOs
+        } else {
+            VolumePlatform::Linux
+        };
+        assert_eq!(control.platform, expected);
+    }
+
     #[test]
     fn reads_wpctl_first() {
         let runner =
             FakeRunner::with(&[("wpctl get-volume @DEFAULT_AUDIO_SINK@", "Volume: 0.75\n")]);
-        assert_eq!(VolumeControl::new(runner).current_percent(), Some(75));
+        assert_eq!(linux_control(runner).current_percent(), Some(75));
     }
 
     #[test]
@@ -233,12 +381,12 @@ mod tests {
             "pactl get-sink-volume @DEFAULT_SINK@",
             "Volume: front-left: 49151 /  75% / -7.50 dB,   front-right: 49151 /  75% / -7.50 dB",
         )]);
-        assert_eq!(VolumeControl::new(pactl).current_percent(), Some(75));
+        assert_eq!(linux_control(pactl).current_percent(), Some(75));
         let amixer = FakeRunner::with(&[(
             "amixer sget Master",
             "  Mono: Playback 52 [81%] [-12.00dB] [on]",
         )]);
-        assert_eq!(VolumeControl::new(amixer).current_percent(), Some(81));
+        assert_eq!(linux_control(amixer).current_percent(), Some(81));
     }
 
     #[test]
@@ -251,7 +399,7 @@ mod tests {
             ),
             ("pactl set-sink-volume @DEFAULT_SINK@ 100%", ""),
         ]);
-        let control = VolumeControl::new(runner);
+        let control = linux_control(runner);
         control.adjust(RotateDirection::Next);
         let calls = control.runner.calls.lock().unwrap().clone();
         assert!(calls.contains(&"pactl set-sink-volume @DEFAULT_SINK@ 100%".to_string()));
@@ -267,7 +415,7 @@ mod tests {
 
     #[test]
     fn missing_tools_give_none_without_panicking() {
-        let control = VolumeControl::new(FakeRunner::default());
+        let control = linux_control(FakeRunner::default());
         assert_eq!(control.current_percent(), None);
         assert_eq!(control.adjust(RotateDirection::Next), None);
     }
@@ -278,7 +426,7 @@ mod tests {
             ("wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%-", ""),
             ("wpctl get-volume @DEFAULT_AUDIO_SINK@", "Volume: 0.70"),
         ]);
-        let control = VolumeControl::new(runner);
+        let control = linux_control(runner);
         assert_eq!(control.adjust(RotateDirection::Previous), Some(70));
         let calls = control.runner.calls.lock().unwrap().clone();
         assert_eq!(
@@ -320,10 +468,10 @@ mod tests {
 
     #[test]
     fn worker_reads_at_start_and_after_each_adjustment() {
-        let worker = VolumeWorker::spawn(FakeRunner::with(&[
+        let worker = VolumeWorker::spawn_control(linux_control(FakeRunner::with(&[
             ("wpctl get-volume @DEFAULT_AUDIO_SINK@", "Volume: 0.75"),
             ("wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+", ""),
-        ]));
+        ])));
         assert_eq!(wait_for_reading(&worker), Some(75));
         worker.adjust(RotateDirection::Next);
         assert_eq!(wait_for_reading(&worker), Some(75));
@@ -334,13 +482,13 @@ mod tests {
     fn worker_requests_do_not_wait_for_the_commands() {
         let (release, release_receiver) = mpsc::channel();
         let started_at = Instant::now();
-        let worker = VolumeWorker::spawn(GatedRunner {
+        let worker = VolumeWorker::spawn_control(linux_control(GatedRunner {
             inner: FakeRunner::with(&[
                 ("wpctl get-volume @DEFAULT_AUDIO_SINK@", "Volume: 0.40"),
                 ("wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%-", ""),
             ]),
             release: Mutex::new(release_receiver),
-        });
+        }));
         worker.adjust(RotateDirection::Previous);
         assert!(started_at.elapsed() < Duration::from_millis(500));
         assert_eq!(worker.latest_reading(), None);
@@ -358,7 +506,7 @@ mod tests {
             ),
         ]);
         assert_eq!(
-            VolumeControl::new(runner).adjust(RotateDirection::Next),
+            linux_control(runner).adjust(RotateDirection::Next),
             Some(80)
         );
     }
