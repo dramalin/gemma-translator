@@ -38,8 +38,11 @@ pub fn render(view: &AppView, window: &AppWindow, models: &Models) {
     window.set_status_text(view.status.as_str().into());
     window.set_is_settings_open(view.is_settings_open);
     set_if_changed(&models.levels, &view.levels);
-    let settings_rows: Vec<SettingsRow> = view.settings_rows.iter().map(settings_row).collect();
-    set_if_changed(&models.settings_rows, &settings_rows);
+    // The rows are only drawn while the settings page is open.
+    if view.is_settings_open {
+        let settings_rows: Vec<SettingsRow> = view.settings_rows.iter().map(settings_row).collect();
+        set_if_changed(&models.settings_rows, &settings_rows);
+    }
 }
 
 fn theme_color((red, green, blue): (u8, u8, u8)) -> Color {
@@ -63,13 +66,18 @@ fn settings_row(row: &SettingsRowView) -> SettingsRow {
     }
 }
 
-/// Replaces the model's rows (cloning `rows`) only when they differ, so Slint
-/// does not redo the list for unchanged contents on every frame.
+/// Brings the model in line with `rows`, touching only what differs: changed
+/// rows when the length is the same (so Slint keeps the existing items instead
+/// of rebuilding the list), otherwise the whole list.
 fn set_if_changed<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: &[T]) {
-    let is_changed = model.row_count() != rows.len()
-        || model.iter().zip(rows).any(|(current, row)| current != *row);
-    if is_changed {
+    if model.row_count() != rows.len() {
         model.set_vec(rows.to_vec());
+        return;
+    }
+    for (index, row) in rows.iter().enumerate() {
+        if model.row_data(index).as_ref() != Some(row) {
+            model.set_row_data(index, row.clone());
+        }
     }
 }
 

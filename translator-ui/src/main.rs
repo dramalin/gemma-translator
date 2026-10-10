@@ -45,36 +45,31 @@ fn main() -> ExitCode {
         RecordStyle::Hold,
         options.model_dir,
     )));
-    let models = Rc::new(render::Models::bind(&window));
+    let models = render::Models::bind(&window);
     render::render(&state.borrow().view(), &window, &models);
 
-    let key_state = Rc::clone(&state);
-    window.on_key_pressed(move |text| {
-        Key::from_event_text(&text)
-            .is_some_and(|key| key_state.borrow_mut().handle_key(key, KeyAction::Pressed))
-    });
-    let release_state = Rc::clone(&state);
-    window.on_key_released(move |text| {
-        Key::from_event_text(&text).is_some_and(|key| {
-            release_state
-                .borrow_mut()
-                .handle_key(key, KeyAction::Released)
-        })
-    });
+    let key_handler = |action| {
+        let state = Rc::clone(&state);
+        move |text: slint::SharedString| {
+            Key::from_event_text(&text)
+                .is_some_and(|key| state.borrow_mut().handle_key(key, action))
+        }
+    };
+    window.on_key_pressed(key_handler(KeyAction::Pressed));
+    window.on_key_released(key_handler(KeyAction::Released));
     let focus_state = Rc::clone(&state);
     window.on_keyboard_focus_lost(move || focus_state.borrow_mut().handle_focus_lost());
 
     let frame_timer = slint::Timer::default();
     let weak_window = window.as_weak();
     let frame_state = Rc::clone(&state);
-    let frame_models = Rc::clone(&models);
     frame_timer.start(slint::TimerMode::Repeated, FRAME_INTERVAL, move || {
         let Some(window) = weak_window.upgrade() else {
             return;
         };
         let mut state = frame_state.borrow_mut();
         state.tick();
-        render::render(&state.view(), &window, &frame_models);
+        render::render(&state.view(), &window, &models);
     });
 
     match window.run() {
