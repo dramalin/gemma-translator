@@ -244,8 +244,7 @@ impl AppState {
         let Some(command) = command else {
             return false;
         };
-        let effects = self.controller.handle_command(command);
-        self.execute(effects);
+        self.run_command(command);
         true
     }
 
@@ -258,8 +257,7 @@ impl AppState {
         else {
             return false;
         };
-        let effects = self.controller.handle_command(command);
-        self.execute(effects);
+        self.run_command(command);
         true
     }
 
@@ -309,9 +307,13 @@ impl AppState {
     /// recording may never arrive: end it now.
     pub fn handle_focus_lost(&mut self) {
         if let Phase::Recording(lane) = self.controller.phase() {
-            let effects = self.controller.handle_command(Command::StopRecording(lane));
-            self.execute(effects);
+            self.run_command(Command::StopRecording(lane));
         }
+    }
+
+    fn run_command(&mut self, command: Command) {
+        let effects = self.controller.handle_command(command);
+        self.execute(effects);
     }
 
     fn execute(&mut self, effects: Vec<Effect>) {
