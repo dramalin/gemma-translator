@@ -185,9 +185,104 @@ fn push_trimmed(sentences: &mut Vec<String>, text: &str) {
     }
 }
 
+/// Removes the spaces Moonshine sometimes puts between Chinese or Japanese
+/// characters ("请 问" for "请问"). A space with a Latin letter or digit on
+/// either side is kept. Not for Korean, which separates words with spaces.
+pub fn remove_cjk_spaces(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    chars
+        .iter()
+        .enumerate()
+        .filter(|&(i, &c)| {
+            !(c == ' '
+                && i > 0
+                && chars.get(i + 1).is_some_and(|&next| is_cjk(next))
+                && is_cjk(chars[i - 1]))
+        })
+        .map(|(_, &c)| c)
+        .collect()
+}
+
+/// Han, kana, and CJK or full-width punctuation.
+fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{3000}'..='\u{30FF}'
+        | '\u{3400}'..='\u{4DBF}'
+        | '\u{4E00}'..='\u{9FFF}'
+        | '\u{F900}'..='\u{FAFF}'
+        | '\u{FF00}'..='\u{FFEF}')
+}
+
+/// Shortest phrase, in characters, that counts as a repetition loop; shorter
+/// repeats ("no, no") are left alone.
+const MIN_REPEATED_PHRASE_CHARS: usize = 8;
+
+/// Cuts a recognizer's repetition loop at the end of `text`: when the text
+/// ends with a phrase followed by one or more copies of it (the last copy may
+/// be partial), only the first copy is kept. Moonshine falls into such loops
+/// when a recording holds several seconds of silence.
+pub fn drop_trailing_repetition(text: &str) -> &str {
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
+    let len = chars.len();
+    let mut cut = len;
+    for period in MIN_REPEATED_PHRASE_CHARS..=len / 2 {
+        // Walk back while each character equals the one a period earlier.
+        let mut start = len;
+        while start > period && chars[start - 1].1 == chars[start - 1 - period].1 {
+            start -= 1;
+        }
+        // `start - period` begins the first copy; a loop needs a whole second copy.
+        if len - start >= period {
+            cut = cut.min(start);
+        }
+    }
+    if cut == len {
+        return text;
+    }
+    text[..chars[cut].0].trim_end()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spaces_between_cjk_characters_are_removed() {
+        assert_eq!(
+            remove_cjk_spaces("请 问 最 近 的 火 车 站 在 哪 里 ？"),
+            "请问最近的火车站在哪里？"
+        );
+        assert_eq!(remove_cjk_spaces("駅 は どこ です か"), "駅はどこですか");
+        assert_eq!(
+            remove_cjk_spaces("我 想 买 iPhone 16 和 AirPods"),
+            "我想买 iPhone 16 和 AirPods"
+        );
+        assert_eq!(remove_cjk_spaces("Good morning."), "Good morning.");
+    }
+
+    #[test]
+    fn repetition_loop_keeps_the_first_copy() {
+        let looped = "请 问 车 站 在 哪 里 我 想 买 两 张 车 票 我 想 买 两 张 车 票 我 想 买 两 张 车 票 我 想";
+        assert_eq!(
+            drop_trailing_repetition(looped),
+            "请 问 车 站 在 哪 里 我 想 买 两 张 车 票"
+        );
+        let whole = "请问最近的车站在哪里？请问最近的车站在哪里？请问最近";
+        assert_eq!(drop_trailing_repetition(whole), "请问最近的车站在哪里？");
+    }
+
+    #[test]
+    fn text_without_a_loop_is_unchanged() {
+        for text in [
+            "",
+            "Good morning.",
+            "No, no, no.",
+            "请问最近的火车站在哪里？我想买两张到台北的车票。",
+            "I would like to buy two tickets to Tokyo.",
+        ] {
+            assert_eq!(drop_trailing_repetition(text), text);
+        }
+    }
 
     #[test]
     fn prompt_names_both_languages_and_forbids_extras() {

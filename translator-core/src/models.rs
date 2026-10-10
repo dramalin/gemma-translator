@@ -58,7 +58,16 @@ const ENGLISH_STREAMING_COMPONENTS: &[&str] = &[
 /// default suits alphabetic scripts, but a CJK character takes several
 /// byte-level tokens, so the default cuts ja/zh/ko sentences short; 13 was
 /// measured to end the truncation. The value was first found with the old Python backend.
-const CJK_TRANSCRIBER_OPTIONS: &[(&str, &str)] = &[("max_tokens_per_second", "13.0")];
+///
+/// `vad_threshold` 0 turns off Moonshine's own voice activity detection, so
+/// the whole recording is one segment. Its VAD keeps state from earlier calls,
+/// which moved the segment start by up to 0.3 s and changed the transcript of
+/// the same audio from call to call. Without it, about 4 s of silence in the
+/// segment makes the model repeat itself, which
+/// `text::drop_trailing_repetition` cuts off.
+const TRANSCRIBER_OPTIONS: &[(&str, &str)] = &[("vad_threshold", "0")];
+const CJK_TRANSCRIBER_OPTIONS: &[(&str, &str)] =
+    &[("vad_threshold", "0"), ("max_tokens_per_second", "13.0")];
 
 impl TtsVoice {
     /// Options for `moonshine_create_tts_synthesizer_from_files` and
@@ -116,7 +125,7 @@ impl LanguageCode {
     pub fn transcriber_options(self) -> &'static [(&'static str, &'static str)] {
         match self {
             LanguageCode::Ja | LanguageCode::Zh | LanguageCode::Ko => CJK_TRANSCRIBER_OPTIONS,
-            LanguageCode::Ar | LanguageCode::En | LanguageCode::Es => &[],
+            LanguageCode::Ar | LanguageCode::En | LanguageCode::Es => TRANSCRIBER_OPTIONS,
         }
     }
 
@@ -222,13 +231,13 @@ mod tests {
     }
 
     #[test]
-    fn only_cjk_transcribers_raise_the_token_limit() {
+    fn only_cjk_transcribers_raise_the_token_limit_and_none_use_the_vad() {
         for language in LanguageCode::ALL {
             let expected: &[(&str, &str)] = match language {
                 LanguageCode::Ja | LanguageCode::Zh | LanguageCode::Ko => {
-                    &[("max_tokens_per_second", "13.0")]
+                    &[("vad_threshold", "0"), ("max_tokens_per_second", "13.0")]
                 }
-                _ => &[],
+                _ => &[("vad_threshold", "0")],
             };
             assert_eq!(language.transcriber_options(), expected, "{language:?}");
         }
