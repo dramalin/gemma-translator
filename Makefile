@@ -24,6 +24,11 @@ test:
 run-mock:
 	$(CARGO) run -p translator-ui -- --mock
 
+## run-tui: run the terminal UI (make run-tui ARGS=--mock for mock services)
+.PHONY: run-tui
+run-tui:
+	$(CARGO) run -p translator-tui -- $(ARGS)
+
 ## run: run the UI against the local speech service and litert-lm
 .PHONY: run
 run:

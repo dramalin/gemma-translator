@@ -3,9 +3,11 @@ resolver = "2"
 members = [
     "litert-lm-sys",
     "moonshine-sys",
+    "translator-app",
     "translator-core",
     "translator-io",
     "translator-models",
+    "translator-tui",
     "translator-ui",
 ]
 

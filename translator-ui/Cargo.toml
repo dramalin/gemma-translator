@@ -16,12 +16,9 @@ desktop = ["slint/backend-winit", "slint/renderer-femtovg"]
 kms = ["slint/backend-linuxkms-noseat", "slint/renderer-femtovg"]
 
 [dependencies]
+translator-app = { path = "../translator-app" }
 translator-core = { path = "../translator-core" }
-translator-io = { path = "../translator-io" }
 slint = { version = "1.17", default-features = false, features = ["compat-1-2", "std"] }
 
 [build-dependencies]
 slint-build = "1.17"
-
-[dev-dependencies]
-tempfile = "3"

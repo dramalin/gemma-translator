@@ -1,17 +1,17 @@
-//! UI-thread state: turns key presses into controller commands and carries out
-//! the controller's effects on the audio devices, job runner and config file.
+//! UI-independent application state: turns key presses into controller
+//! commands and carries out the controller's effects on the audio devices,
+//! job runner and config file.
 
 use std::path::PathBuf;
-use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::Instant;
 
-use slint::{Model, ModelRc, VecModel};
 use translator_core::config::{Config, InferenceBackend};
 use translator_core::controller::{Controller, Effect, JobEvent, Phase};
 use translator_core::keys::{
-    command_for_key_press, command_for_key_release, Command, Key, KeyboardMode,
+    command_for_key_press, command_for_key_release, command_for_key_toggle, Command, Key,
+    KeyboardMode,
 };
 use translator_core::lane::Lane;
 use translator_core::models::ModelPaths;
@@ -24,10 +24,10 @@ use translator_io::native::{self, speech::NativeSpeech, translator::NativeTransl
 use translator_io::playback_queue::{DiscardingSink, PlaybackSink};
 use translator_io::runner::{JobRunner, Services};
 use translator_io::speech_client::SpeechServiceClient;
-use translator_io::volume::{SystemCommandRunner, VolumeWorker};
+use translator_io::volume::{CommandRunner, SystemCommandRunner, VolumeWorker};
 
-use crate::view::{lane_view, settings_rows, status_line, theme_color, update_levels};
-use crate::{mock, AppWindow, SettingsRow};
+use crate::mock;
+use crate::view::{lane_view, settings_rows, status_line, update_levels, AppView};
 
 /// Microphone RMS is small; scale it so normal speech fills the bars.
 const LEVEL_GAIN: f32 = 8.0;
@@ -73,6 +73,37 @@ impl Capture {
     }
 }
 
+/// The audio side of a new AppState.
+struct Devices {
+    capture: Capture,
+    player: Option<AudioPlayer>,
+    playback: Arc<dyn PlaybackSink>,
+}
+
+/// Volume commands for headless state: none are run, the volume reads N/A.
+struct NoVolumeCommands;
+
+impl CommandRunner for NoVolumeCommands {
+    fn run(&self, _program: &str, _args: &[&str]) -> Option<String> {
+        None
+    }
+}
+
+/// How the recording keys behave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordStyle {
+    /// Record while the key is held (Slint: windows report releases).
+    Hold,
+    /// Press to start, press again to stop (terminals report no releases).
+    Toggle,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyAction {
+    Pressed,
+    Released,
+}
+
 pub struct AppState {
     controller: Controller,
     settings_cursor: SettingsCursor,
@@ -86,16 +117,26 @@ pub struct AppState {
     config_path: Option<PathBuf>,
     pending_capture: Option<CapturedAudio>,
     levels: Vec<f32>,
-    levels_model: Rc<VecModel<f32>>,
-    settings_model: Rc<VecModel<SettingsRow>>,
+    record_style: RecordStyle,
+    audio_warning: Option<String>,
 }
 
 impl AppState {
-    pub fn new(config: Config, config_path: Option<PathBuf>, is_mock: bool) -> Self {
+    /// Opens the configured (or default) microphone and speaker; without them
+    /// it records silence and discards audio, so jobs still run, and
+    /// `AppView::audio_warning` says why.
+    pub fn new(
+        config: Config,
+        config_path: Option<PathBuf>,
+        is_mock: bool,
+        record_style: RecordStyle,
+    ) -> Self {
+        let mut warnings = Vec::new();
         let capture = match AudioRecorder::open(config.audio_input_device.as_deref()) {
             Ok(recorder) => Capture::Device(recorder),
             Err(error) => {
                 eprintln!("[audio] microphone unavailable ({error}); recording silence");
+                warnings.push("no microphone: recording silence");
                 Capture::Silent { started_at: None }
             }
         };
@@ -107,42 +148,71 @@ impl AppState {
                 }
                 Err(error) => {
                     eprintln!("[audio] speaker unavailable ({error}); audio is discarded");
+                    warnings.push("no speaker: audio discarded");
                     (None, Arc::new(DiscardingSink))
                 }
             };
         let services = if is_mock {
             mock::services()
         } else {
-            match config.inference_backend {
-                InferenceBackend::Http => {
-                    let speech = Arc::new(SpeechServiceClient::new(&config.speech_service_url));
-                    Services {
-                        stt: speech.clone(),
-                        translator: Arc::new(LlmClient::new(
-                            &config.llm_endpoint,
-                            &config.llm_model,
-                        )),
-                        tts: speech,
-                    }
-                }
-                InferenceBackend::Native => native_services(&config),
-            }
+            configured_services(&config)
         };
+        Self::assemble(
+            config,
+            config_path,
+            record_style,
+            Devices {
+                capture,
+                player,
+                playback,
+            },
+            services,
+            VolumeWorker::spawn(SystemCommandRunner),
+            (!warnings.is_empty()).then(|| warnings.join(", ")),
+        )
+    }
+
+    /// Mock services, silent recordings, discarded audio, no volume commands
+    /// and no config file: runs anywhere, including tests without audio devices.
+    pub fn headless(config: Config, record_style: RecordStyle) -> Self {
+        Self::assemble(
+            config,
+            None,
+            record_style,
+            Devices {
+                capture: Capture::Silent { started_at: None },
+                player: None,
+                playback: Arc::new(DiscardingSink),
+            },
+            mock::services(),
+            VolumeWorker::spawn(NoVolumeCommands),
+            None,
+        )
+    }
+
+    fn assemble(
+        config: Config,
+        config_path: Option<PathBuf>,
+        record_style: RecordStyle,
+        devices: Devices,
+        services: Services,
+        volume: VolumeWorker,
+        audio_warning: Option<String>,
+    ) -> Self {
         let (sender, job_events) = mpsc::channel();
         let runner = JobRunner::new(
             services,
-            Arc::clone(&playback),
+            Arc::clone(&devices.playback),
             Arc::new(move |event| {
                 let _ = sender.send(event);
             }),
         );
-        let volume = VolumeWorker::spawn(SystemCommandRunner);
         AppState {
             controller: Controller::new(config),
             settings_cursor: SettingsCursor::default(),
-            capture,
-            playback,
-            _player: player,
+            capture: devices.capture,
+            playback: devices.playback,
+            _player: devices.player,
             runner,
             job_events,
             volume,
@@ -150,21 +220,20 @@ impl AppState {
             config_path,
             pending_capture: None,
             levels: Vec::new(),
-            levels_model: Rc::new(VecModel::default()),
-            settings_model: Rc::new(VecModel::default()),
+            record_style,
+            audio_warning,
         }
     }
 
-    /// Connects the list models to the window once; `render` updates their contents.
-    pub fn bind_models(&self, window: &AppWindow) {
-        window.set_visualizer_levels(ModelRc::from(self.levels_model.clone()));
-        window.set_settings_rows(ModelRc::from(self.settings_model.clone()));
+    /// Returns true when the key was handled.
+    pub fn handle_key(&mut self, key: Key, action: KeyAction) -> bool {
+        match action {
+            KeyAction::Pressed => self.handle_key_pressed(key),
+            KeyAction::Released => self.handle_key_released(key),
+        }
     }
 
-    pub fn handle_key_pressed(&mut self, text: &str) -> bool {
-        let Some(key) = Key::from_event_text(text) else {
-            return false;
-        };
+    fn handle_key_pressed(&mut self, key: Key) -> bool {
         if self.controller.is_settings_open() && key != Key::Escape {
             if let Some(action) = self.settings_cursor.handle_key(key) {
                 let effects = self.controller.apply_settings_action(action);
@@ -173,7 +242,12 @@ impl AppState {
             return true;
         }
         let mode = self.controller.config().keyboard_mode;
-        let Some(command) = command_for_key_press(mode, key, self.controller.active_lane()) else {
+        let lane = self.controller.active_lane();
+        let command = match self.record_style {
+            RecordStyle::Hold => command_for_key_press(mode, key, lane),
+            RecordStyle::Toggle => command_for_key_toggle(mode, key, lane, self.controller.phase()),
+        };
+        let Some(command) = command else {
             return false;
         };
         let effects = self.controller.handle_command(command);
@@ -181,10 +255,10 @@ impl AppState {
         true
     }
 
-    pub fn handle_key_released(&mut self, text: &str) -> bool {
-        let Some(key) = Key::from_event_text(text) else {
+    fn handle_key_released(&mut self, key: Key) -> bool {
+        if self.record_style == RecordStyle::Toggle {
             return false;
-        };
+        }
         let mode = self.controller.config().keyboard_mode;
         let Some(command) = command_for_key_release(mode, key, self.controller.active_lane())
         else {
@@ -210,26 +284,31 @@ impl AppState {
         update_levels(&mut self.levels, bar_count, level);
     }
 
-    pub fn render(&self, window: &AppWindow) {
+    /// The frame to draw now.
+    pub fn view(&self) -> AppView {
         let controller = &self.controller;
         let config = controller.config();
         let transcript = controller.transcript();
-        window.set_theme_color(theme_color(config.theme_color));
-        window.set_lane1(lane_view(controller, Lane::One));
-        window.set_lane2(lane_view(controller, Lane::Two));
-        window.set_show_active_brackets(config.keyboard_mode == KeyboardMode::Landscape);
-        window.set_source_label(transcript.source_label.as_str().into());
-        window.set_transcription(transcript.transcription.as_str().into());
-        window.set_target_label(transcript.target_label.as_str().into());
-        window.set_translation(transcript.translation.as_str().into());
-        window.set_is_translation_right_to_left(transcript.is_translation_right_to_left);
-        window.set_status_text(status_line(controller).into());
-        window.set_is_settings_open(controller.is_settings_open());
-        set_if_changed(&self.levels_model, self.levels.clone());
-        set_if_changed(
-            &self.settings_model,
-            settings_rows(config, &self.settings_cursor, self.volume_percent),
-        );
+        AppView {
+            theme_rgb: config.theme_color.rgb(),
+            lanes: [
+                lane_view(controller, Lane::One),
+                lane_view(controller, Lane::Two),
+            ],
+            keyboard_mode: config.keyboard_mode,
+            phase: controller.phase(),
+            show_active_marker: config.keyboard_mode == KeyboardMode::Landscape,
+            source_label: transcript.source_label.clone(),
+            transcription: transcript.transcription.clone(),
+            target_label: transcript.target_label.clone(),
+            translation: transcript.translation.clone(),
+            is_translation_right_to_left: transcript.is_translation_right_to_left,
+            status: status_line(controller),
+            audio_warning: self.audio_warning.clone(),
+            levels: self.levels.clone(),
+            is_settings_open: controller.is_settings_open(),
+            settings_rows: settings_rows(config, &self.settings_cursor, self.volume_percent),
+        }
     }
 
     /// The window lost keyboard focus, so the key release that would end a
@@ -287,11 +366,18 @@ impl AppState {
     }
 }
 
-/// Replaces the model's rows only when they differ, so Slint does not redo
-/// the list for unchanged contents on every frame.
-fn set_if_changed<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) {
-    if model.iter().ne(rows.iter().cloned()) {
-        model.set_vec(rows);
+/// The HTTP services (phase A) or the in-process ones, per the config.
+fn configured_services(config: &Config) -> Services {
+    match config.inference_backend {
+        InferenceBackend::Http => {
+            let speech = Arc::new(SpeechServiceClient::new(&config.speech_service_url));
+            Services {
+                stt: speech.clone(),
+                translator: Arc::new(LlmClient::new(&config.llm_endpoint, &config.llm_model)),
+                tts: speech,
+            }
+        }
+        InferenceBackend::Native => native_services(config),
     }
 }
 
@@ -309,5 +395,69 @@ fn native_services(config: &Config) -> Services {
         stt: speech.clone(),
         translator: Arc::new(NativeTranslator::spawn(lib_dir, paths)),
         tts: speech,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use translator_core::controller::MIN_RECORDING_DURATION;
+
+    use super::*;
+
+    /// Ticks until `done(view)` holds, failing after 10 s.
+    fn tick_until(state: &mut AppState, done: impl Fn(&AppView) -> bool) -> AppView {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            state.tick();
+            let view = state.view();
+            if done(&view) {
+                return view;
+            }
+            assert!(Instant::now() < deadline, "gave up waiting: {view:?}");
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn toggle_style_records_until_the_second_press_and_finishes_the_job() {
+        let mut state = AppState::headless(Config::default(), RecordStyle::Toggle);
+        assert!(state.handle_key(Key::Z, KeyAction::Pressed));
+        assert_eq!(state.view().phase, Phase::Recording(Lane::One));
+        assert!(!state.handle_key(Key::Z, KeyAction::Released));
+        assert_eq!(state.view().phase, Phase::Recording(Lane::One));
+        thread::sleep(MIN_RECORDING_DURATION + Duration::from_millis(50));
+        assert!(state.handle_key(Key::Z, KeyAction::Pressed));
+        let view = tick_until(&mut state, |view| {
+            view.phase == Phase::Idle && !view.translation.is_empty()
+        });
+        assert_eq!(view.status, "READY");
+        assert!(!view.transcription.is_empty());
+    }
+
+    #[test]
+    fn hold_style_stops_recording_on_release() {
+        let mut state = AppState::headless(Config::default(), RecordStyle::Hold);
+        assert!(state.handle_key(Key::Z, KeyAction::Pressed));
+        assert_eq!(state.view().phase, Phase::Recording(Lane::One));
+        // A second press while held (no release yet) does not stop it.
+        state.handle_key(Key::Z, KeyAction::Pressed);
+        assert_eq!(state.view().phase, Phase::Recording(Lane::One));
+        assert!(state.handle_key(Key::Z, KeyAction::Released));
+        // Released right away: shorter than the minimum, so it is discarded.
+        assert_eq!(state.view().phase, Phase::Idle);
+    }
+
+    #[test]
+    fn settings_keys_go_to_the_cursor_while_settings_are_open() {
+        let mut state = AppState::headless(Config::default(), RecordStyle::Toggle);
+        assert!(state.handle_key(Key::Escape, KeyAction::Pressed));
+        assert!(state.view().is_settings_open);
+        assert!(state.handle_key(Key::ArrowRight, KeyAction::Pressed));
+        assert_eq!(state.view().settings_rows[0].value, "VERTICAL");
+        assert!(state.handle_key(Key::Z, KeyAction::Pressed));
+        assert_eq!(state.view().phase, Phase::Idle);
     }
 }

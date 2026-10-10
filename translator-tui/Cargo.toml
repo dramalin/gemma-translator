@@ -1,0 +1,18 @@
+[package]
+name = "translator-tui"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "translator-tui"
+path = "src/main.rs"
+
+[dependencies]
+translator-app = { path = "../translator-app" }
+translator-core = { path = "../translator-core" }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

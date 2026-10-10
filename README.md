@@ -88,6 +88,26 @@ make build-pi   # release build for the Pi (KMS backend, aarch64)
 
 Settings are stored in `~/.config/gemma-translator/config.toml`. In the Rust UI, `Esc` opens the settings page (↑/↓ select, ←/→ change); all other keys match the tables above. Recordings shorter than 300 ms are ignored.
 
+### Terminal UI
+
+`translator-tui` is the same translator in a terminal, for a desktop terminal
+or an SSH session (audio uses the machine it runs on):
+
+```bash
+make run-tui ARGS=--mock   # mock services
+make run-tui               # uses inference_backend from the config
+```
+
+Terminals do not report key releases, so recording toggles: tap `Z` (or `Z`/`X`
+in vertical mode) to start and tap again to stop. Holding the key, or tapping
+it again within 1 s, counts as one tap. `Esc` opens settings and `Ctrl-C`
+quits; Ctrl-Z does not suspend. A missing microphone or speaker is shown on
+the status line. Native-library output goes to
+`~/.local/state/gemma-translator/translator-tui.log`. Arabic is shown in
+logical order; right-to-left display depends on the terminal (Konsole and
+mlterm handle it). Without `COLORTERM=truecolor` the theme colour is
+approximated.
+
 ### In-process inference (phase B, experimental)
 
 The `translator` binary can run speech recognition, translation and speech

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::controller::Phase;
 use crate::lane::Lane;
 use crate::language::RotateDirection;
 
@@ -98,6 +99,28 @@ pub fn command_for_key_release(mode: KeyboardMode, key: Key, active_lane: Lane) 
     }
 }
 
+/// Toggle-style recording for terminals, which do not report key releases:
+/// a recording key starts recording on its lane, or stops it when that lane
+/// is already recording. Every other key maps as in `command_for_key_press`.
+pub fn command_for_key_toggle(
+    mode: KeyboardMode,
+    key: Key,
+    active_lane: Lane,
+    phase: Phase,
+) -> Option<Command> {
+    let recording_key_lane = match (mode, key) {
+        (KeyboardMode::Landscape, Key::Z) => Some(active_lane),
+        (KeyboardMode::Vertical, Key::Z) => Some(Lane::One),
+        (KeyboardMode::Vertical, Key::X) => Some(Lane::Two),
+        _ => None,
+    };
+    match recording_key_lane {
+        Some(lane) if phase == Phase::Recording(lane) => Some(Command::StopRecording(lane)),
+        Some(lane) => Some(Command::StartRecording(lane)),
+        None => command_for_key_press(mode, key, active_lane),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,6 +209,67 @@ mod tests {
                 Some(Command::ToggleSettings)
             );
             assert_eq!(command_for_key_release(mode, Key::Escape, Lane::One), None);
+        }
+    }
+
+    #[test]
+    fn toggle_starts_then_stops_the_landscape_recording() {
+        let mode = KeyboardMode::Landscape;
+        assert_eq!(
+            command_for_key_toggle(mode, Key::Z, Lane::Two, Phase::Idle),
+            Some(Command::StartRecording(Lane::Two))
+        );
+        assert_eq!(
+            command_for_key_toggle(mode, Key::Z, Lane::Two, Phase::Recording(Lane::Two)),
+            Some(Command::StopRecording(Lane::Two))
+        );
+        // A job in flight is interrupted by a new recording, as with hold style.
+        assert_eq!(
+            command_for_key_toggle(mode, Key::Z, Lane::One, Phase::Speaking(Lane::One)),
+            Some(Command::StartRecording(Lane::One))
+        );
+    }
+
+    #[test]
+    fn toggle_uses_z_and_x_per_lane_in_vertical_mode() {
+        let mode = KeyboardMode::Vertical;
+        assert_eq!(
+            command_for_key_toggle(mode, Key::X, Lane::One, Phase::Idle),
+            Some(Command::StartRecording(Lane::Two))
+        );
+        assert_eq!(
+            command_for_key_toggle(mode, Key::X, Lane::One, Phase::Recording(Lane::Two)),
+            Some(Command::StopRecording(Lane::Two))
+        );
+        // The other lane's key while lane 1 records asks to start lane 2;
+        // the controller ignores it because a recording is in progress.
+        assert_eq!(
+            command_for_key_toggle(mode, Key::X, Lane::One, Phase::Recording(Lane::One)),
+            Some(Command::StartRecording(Lane::Two))
+        );
+        assert_eq!(
+            command_for_key_toggle(mode, Key::Z, Lane::Two, Phase::Recording(Lane::One)),
+            Some(Command::StopRecording(Lane::One))
+        );
+    }
+
+    #[test]
+    fn toggle_maps_other_keys_like_a_press() {
+        for mode in [KeyboardMode::Landscape, KeyboardMode::Vertical] {
+            for key in [
+                Key::Space,
+                Key::ArrowLeft,
+                Key::ArrowRight,
+                Key::Minus,
+                Key::Plus,
+                Key::Escape,
+            ] {
+                assert_eq!(
+                    command_for_key_toggle(mode, key, Lane::One, Phase::Idle),
+                    command_for_key_press(mode, key, Lane::One),
+                    "{mode:?} {key:?}"
+                );
+            }
         }
     }
 }

@@ -25,6 +25,7 @@ cd frontend
 npm run dev | npm run build | npm run format   # format uses oxfmt
 make test               # Rust workspace tests + backend/test_*.py
 make run-mock           # Rust/Slint UI with mock services
+make run-tui            # Rust terminal UI (ARGS=--mock for mock services)
 make native-libs        # fetch pinned libmoonshine / liblitert-lm into native/<arch>/lib
 make models             # download all models into MODEL_DIR (default ./models)
 make test-ffi           # #[ignore]d tests that need native libs + models
@@ -32,7 +33,7 @@ make run-native         # Rust UI with in-process inference (inference_backend =
 cargo test -p translator-core controller   # one crate, tests matching "controller"
 ```
 
-The Rust workspace (`litert-lm-sys`, `moonshine-sys`, `translator-core`, `translator-io`, `translator-ui`, `translator-models`) is checked with `make test` (all Rust tests plus the Python backend unit tests), `make clippy` and `cargo fmt --all -- --check`; the React frontend has no test suite or linter beyond `oxfmt`. `start.sh` kills anything on ports 9379/3000/5173 when not under systemd (`$INVOCATION_ID` unset). In prod, a stale `frontend/dist/` is NOT rebuilt automatically — run `npm run build` after frontend changes.
+The Rust workspace (`litert-lm-sys`, `moonshine-sys`, `translator-app`, `translator-core`, `translator-io`, `translator-models`, `translator-tui`, `translator-ui`) is checked with `make test` (all Rust tests plus the Python backend unit tests), `make clippy` (`-D warnings`) and `cargo fmt --all -- --check`; the React frontend has no test suite or linter beyond `oxfmt`. `start.sh` kills anything on ports 9379/3000/5173 when not under systemd (`$INVOCATION_ID` unset). In prod, a stale `frontend/dist/` is NOT rebuilt automatically — run `npm run build` after frontend changes.
 
 ## Architecture
 
@@ -55,10 +56,19 @@ Frontend:
 
 ## Rust UI (phase A of docs/superpowers/specs/2026-10-09-rust-frontend-design.md)
 
-- `translator-core`: pure logic (languages, key mapping, sentence splitting, config, the `Controller` state machine). It must not depend on cpal, ureq or slint. The controller returns `Effect`s instead of doing I/O; `translator-ui/src/app.rs` executes them.
+- `translator-core`: pure logic (languages, key mapping, sentence splitting, config, the `Controller` state machine). It must not depend on cpal, ureq or slint. The controller returns `Effect`s instead of doing I/O; `translator-app/src/state.rs` executes them.
 - `translator-io`: cpal audio, HTTP clients (`/v2/stt`, `/v2/tts` on :3000, streaming chat completions on :9379), volume commands, and `JobRunner`, which pipelines STT → streaming translation → per-sentence TTS on background threads and reports `JobEvent`s.
 - `translator-ui`: Slint binary `translator`; `--mock` swaps in fake services. Job events reach the UI thread through an mpsc channel drained by a 30 ms timer.
 - Python `/v2` endpoints take and return raw 16-bit PCM (`backend/pcm.py`); the old `/api/*` endpoints still serve the React UI.
 - `moonshine-sys` / `litert-lm-sys`: run-time (`libloading`) bindings to the vendor libraries from the pinned wheels; signatures are copied from the wheels' ctypes code, so re-check them on any version bump. Handles are `!Send` and live on one worker thread each (`translator-io/src/native/`).
+- `translator-app`: UI-independent `AppState` (audio, job runner, volume, config saving), the `AppView` view model, mock services and CLI parsing, shared by both frontends. Frontends call `handle_key`, `tick` and `view`; `RecordStyle::Hold` (Slint) vs `Toggle` (TUI). `AppState::headless` runs without audio devices or volume commands, for tests.
+- `translator-tui`: ratatui/crossterm terminal frontend (`make run-tui`). Filters auto-repeat on the recording keys (1 s window), ignores Ctrl/Alt combinations, exits cleanly on SIGTERM/SIGINT/SIGHUP, and redirects fd 2 to `~/.local/state/gemma-translator/translator-tui.log` while running; only a main-thread panic restores the terminal.
 - `translator-models`: downloads Gemma, the Moonshine STT models and TTS assets into `model_dir` (layout in `translator-core/src/models.rs`).
 - `inference_backend = "native"` in the config switches the UI from the HTTP services to the native ones. Native tests are `#[ignore]`d: `make native-libs models test-ffi`.
+- `make native-libs` needs `patchelf` (it sets the RUNPATH on the fetched `.so` files). The native libraries print log lines into `make test-ffi` output, so count results from the `test result:` lines only.
+- Agents cannot inject key presses into the Slint window on Wayland; check Slint key handling by hand. The TUI can be smoke-tested in a pty with `--mock`: closing the pty master must exit within ~30 ms with no stray process.
+- TUI: don't use `ratatui::init()`/`restore()` (their panic hook fires on job threads; use `terminal::enter`/`leave`), and never `writeln!(...).unwrap()`/`println!` to the tty: a dead tty aborts the process, so use `let _ = writeln!`.
+
+## Git
+
+- Never add a `Co-Authored-By:` trailer (or any other AI attribution line) to commit messages or PR bodies.

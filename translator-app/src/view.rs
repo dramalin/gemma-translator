@@ -1,33 +1,59 @@
-//! Converts controller state into the structs the Slint UI renders.
+//! Converts controller state into the plain view model both frontends draw.
 
-use slint::Color;
-use translator_core::config::{Config, ThemeColor};
+use translator_core::config::Config;
 use translator_core::controller::{Controller, Phase};
 use translator_core::keys::KeyboardMode;
 use translator_core::lane::Lane;
 use translator_core::settings::{SettingsCursor, SettingsItem};
 
-use crate::{LaneView, SettingsRow};
-
 /// Fraction a visualizer bar keeps per frame once recording stops.
 const LEVEL_DECAY: f32 = 0.8;
 
-pub fn theme_color(theme: ThemeColor) -> Color {
-    let (red, green, blue) = theme.rgb();
-    Color::from_rgb_u8(red, green, blue)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaneView {
+    pub label: String,
+    pub language: String,
+    pub is_active: bool,
+    pub is_recording: bool,
 }
 
-pub fn lane_view(controller: &Controller, lane: Lane) -> LaneView {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingsRowView {
+    pub label: String,
+    pub value: String,
+    pub is_selected: bool,
+}
+
+/// Everything a frontend needs to draw one frame.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AppView {
+    pub theme_rgb: (u8, u8, u8),
+    pub lanes: [LaneView; 2],
+    pub keyboard_mode: KeyboardMode,
+    pub phase: Phase,
+    /// Landscape mode marks the active lane; vertical mode has none.
+    pub show_active_marker: bool,
+    pub source_label: String,
+    pub transcription: String,
+    pub target_label: String,
+    pub translation: String,
+    pub is_translation_right_to_left: bool,
+    pub status: String,
+    /// Why recordings are silent or audio is discarded (no microphone or
+    /// speaker). The TUI shows it; the Slint UI only logs it.
+    pub audio_warning: Option<String>,
+    pub levels: Vec<f32>,
+    pub is_settings_open: bool,
+    pub settings_rows: Vec<SettingsRowView>,
+}
+
+pub(crate) fn lane_view(controller: &Controller, lane: Lane) -> LaneView {
     LaneView {
         label: match lane {
-            Lane::One => "1".into(),
-            Lane::Two => "2".into(),
+            Lane::One => "1".to_string(),
+            Lane::Two => "2".to_string(),
         },
-        language: controller
-            .language(lane)
-            .display_name()
-            .to_uppercase()
-            .into(),
+        language: controller.language(lane).display_name().to_uppercase(),
         is_active: controller.active_lane() == lane,
         is_recording: controller.phase() == Phase::Recording(lane),
     }
@@ -44,7 +70,7 @@ fn phase_text(phase: Phase) -> &'static str {
 }
 
 /// The last error if there is one, otherwise the current phase.
-pub fn status_line(controller: &Controller) -> String {
+pub(crate) fn status_line(controller: &Controller) -> String {
     let status = &controller.transcript().status;
     if status.is_empty() {
         phase_text(controller.phase()).to_string()
@@ -53,11 +79,11 @@ pub fn status_line(controller: &Controller) -> String {
     }
 }
 
-pub fn settings_rows(
+pub(crate) fn settings_rows(
     config: &Config,
     cursor: &SettingsCursor,
     volume_percent: Option<u16>,
-) -> Vec<SettingsRow> {
+) -> Vec<SettingsRowView> {
     SettingsItem::ALL
         .iter()
         .map(|&item| {
@@ -83,9 +109,9 @@ pub fn settings_rows(
                         .map_or_else(|| "N/A".to_string(), |percent| format!("{percent}%")),
                 ),
             };
-            SettingsRow {
-                label: label.into(),
-                value: value.into(),
+            SettingsRowView {
+                label: label.to_string(),
+                value,
                 is_selected: cursor.selected() == item,
             }
         })
@@ -93,7 +119,7 @@ pub fn settings_rows(
 }
 
 /// Scrolls in a new level while recording, decays otherwise; always `bar_count` long.
-pub fn update_levels(levels: &mut Vec<f32>, bar_count: usize, new_level: Option<f32>) {
+pub(crate) fn update_levels(levels: &mut Vec<f32>, bar_count: usize, new_level: Option<f32>) {
     match new_level {
         Some(level) => levels.push(level.clamp(0.0, 1.0)),
         None => levels.iter_mut().for_each(|level| *level *= LEVEL_DECAY),
@@ -172,30 +198,5 @@ mod tests {
             message: "down".to_string(),
         });
         assert_eq!(status_line(&controller), "Error: down");
-    }
-
-    #[test]
-    fn slint_special_keys_match_core_key_codes() {
-        use slint::platform::Key as SlintKey;
-        let cases = [
-            (SlintKey::LeftArrow, Key::ArrowLeft),
-            (SlintKey::RightArrow, Key::ArrowRight),
-            (SlintKey::UpArrow, Key::ArrowUp),
-            (SlintKey::DownArrow, Key::ArrowDown),
-            (SlintKey::Escape, Key::Escape),
-        ];
-        for (slint_key, key) in cases {
-            let text = slint::SharedString::from(slint_key);
-            assert_eq!(Key::from_event_text(&text), Some(key));
-        }
-    }
-
-    #[test]
-    fn theme_color_converts_to_slint() {
-        let color = theme_color(translator_core::config::ThemeColor::Blue);
-        assert_eq!(
-            (color.red(), color.green(), color.blue()),
-            (0x21, 0x96, 0xf3)
-        );
     }
 }
