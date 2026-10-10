@@ -125,11 +125,21 @@ fn soak_repeated_transcription_does_not_leak() {
     );
 }
 
+/// Resident set size of this process: `/proc` on Linux, `ps` elsewhere (macOS).
 fn resident_kib() -> u64 {
-    let status = std::fs::read_to_string("/proc/self/status").unwrap();
-    status
-        .lines()
-        .find_map(|line| line.strip_prefix("VmRSS:"))
-        .and_then(|value| value.trim().trim_end_matches("kB").trim().parse().ok())
-        .unwrap()
+    if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+        return status
+            .lines()
+            .find_map(|line| line.strip_prefix("VmRSS:"))
+            .and_then(|value| value.trim().trim_end_matches("kB").trim().parse().ok())
+            .expect("VmRSS in /proc/self/status");
+    }
+    let output = std::process::Command::new("ps")
+        .args(["-o", "rss=", "-p", &std::process::id().to_string()])
+        .output()
+        .expect("running ps");
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse()
+        .expect("ps prints the resident size in KiB")
 }
