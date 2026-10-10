@@ -35,14 +35,9 @@ pub fn draw(frame: &mut Frame, view: &AppView, is_truecolor: bool) {
     let [left, right] =
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
             .areas(lanes_area);
-    draw_lane(frame, left, &view.lanes[0], view.show_active_marker, accent);
-    draw_lane(
-        frame,
-        right,
-        &view.lanes[1],
-        view.show_active_marker,
-        accent,
-    );
+    for (area, lane) in [left, right].into_iter().zip(&view.lanes) {
+        draw_lane(frame, area, lane, view.show_active_marker, accent);
+    }
     frame.render_widget(
         Paragraph::new(level_bars(&view.levels, levels_area.width)).style(Style::new().fg(accent)),
         levels_area,
@@ -189,9 +184,9 @@ fn status_line(view: &AppView, accent: Color, width: u16) -> Paragraph<'static> 
             Style::new().add_modifier(Modifier::BOLD),
         ));
     }
-    let hint = Line::from(vec![Span::raw(" · "), Span::raw(status_hint(view))]);
+    let hint = Span::raw(format!(" · {}", status_hint(view)));
     if line.width() + hint.width() <= usize::from(width) {
-        line.extend(hint);
+        line.push_span(hint);
     }
     Paragraph::new(line)
 }
