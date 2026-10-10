@@ -185,6 +185,18 @@ fn push_trimmed(sentences: &mut Vec<String>, text: &str) {
     }
 }
 
+/// Tidies a recognizer transcript. For Chinese and Japanese the spaces
+/// between characters go first, so the repetition check counts characters
+/// rather than characters and spaces.
+pub fn clean_transcript(text: &str, language: LanguageCode) -> String {
+    match language {
+        LanguageCode::Zh | LanguageCode::Ja => {
+            drop_trailing_repetition(&remove_cjk_spaces(text)).to_string()
+        }
+        _ => drop_trailing_repetition(text).to_string(),
+    }
+}
+
 /// Removes the spaces Moonshine sometimes puts between Chinese or Japanese
 /// characters ("请 问" for "请问"). A space with a Latin letter or digit on
 /// either side is kept. Not for Korean, which separates words with spaces.
@@ -258,6 +270,26 @@ mod tests {
             "我想买 iPhone 16 和 AirPods"
         );
         assert_eq!(remove_cjk_spaces("Good morning."), "Good morning.");
+    }
+
+    #[test]
+    fn spaced_cjk_loops_are_judged_by_characters() {
+        // Four characters repeat: too short to count as a loop, spaced or not.
+        assert_eq!(
+            clean_transcript("我 不 知 道 我 不 知 道 我 不 知 道", LanguageCode::Zh),
+            "我不知道我不知道我不知道"
+        );
+        let looped = "请 问 车 站 在 哪 里 我 想 买 两 张 到 台 北 的 车 票 \
+                      我 想 买 两 张 到 台 北 的 车 票 我 想 买";
+        assert_eq!(
+            clean_transcript(looped, LanguageCode::Zh),
+            "请问车站在哪里我想买两张到台北的车票"
+        );
+        // Korean keeps its spaces.
+        assert_eq!(
+            clean_transcript("안녕 하세요", LanguageCode::Ko),
+            "안녕 하세요"
+        );
     }
 
     #[test]

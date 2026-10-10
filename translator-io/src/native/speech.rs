@@ -9,7 +9,7 @@ use translator_core::models::{ModelPaths, SttModelArch};
 use translator_core::pipeline::{
     AudioClip, PipelineError, SpeechToText, TextToSpeech, STT_SAMPLE_RATE,
 };
-use translator_core::text::{drop_trailing_repetition, remove_cjk_spaces};
+use translator_core::text::clean_transcript;
 
 use super::engine_error;
 use super::lru::LruCache;
@@ -154,16 +154,6 @@ fn run_speech_thread(
                 let _ = reply.send(result);
             }
         }
-    }
-}
-
-/// Drops a repetition loop and, for Chinese and Japanese, the spaces the
-/// recognizer sometimes puts between characters.
-fn clean_transcript(text: &str, language: LanguageCode) -> String {
-    let text = drop_trailing_repetition(text);
-    match language {
-        LanguageCode::Zh | LanguageCode::Ja => remove_cjk_spaces(text),
-        _ => text.to_string(),
     }
 }
 
