@@ -1,5 +1,5 @@
 # Gemma Translator (Rust UI) — build orchestration.
-# `make run-mock` works on any Linux desktop; `build-pi` targets the Raspberry Pi.
+# `make run-mock` works on any Linux or macOS desktop; `build-pi` targets the Raspberry Pi.
 
 CARGO     := cargo
 PI_TARGET := aarch64-unknown-linux-gnu
@@ -12,6 +12,11 @@ NATIVE_LIB_DIR := $(CURDIR)/native/$(NATIVE_ARCH)/lib
 .PHONY: help
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/## /  /'
+
+## setup: check system tools and fetch everything the project downloads (SETUP_ARGS=--yes skips the model prompt)
+.PHONY: setup
+setup:
+	scripts/setup-env.sh $(SETUP_ARGS)
 
 ## test: run Rust and Python unit tests
 .PHONY: test
@@ -52,12 +57,13 @@ $(NATIVE_LIB_DIR)/.complete:
 
 MODEL_DIR ?= $(CURDIR)/models
 
-## models: download every model into MODEL_DIR (default ./models, ~3.8 GB)
+## models: download every model into MODEL_DIR (default ./models, ~3.8 GB; writes MODEL_DIR/.complete when done)
 .PHONY: models
 models: native-libs
 	mkdir -p $(MODEL_DIR)
 	[ "$(MODEL_DIR)" != "$(CURDIR)/models" ] || printf '*\n' > $(MODEL_DIR)/.gitignore
 	$(CARGO) run --release -p translator-models -- --lib-dir $(NATIVE_LIB_DIR) --model-dir $(MODEL_DIR)
+	touch $(MODEL_DIR)/.complete
 
 FFI_ENV := TRANSLATOR_NATIVE_LIB_DIR=$(NATIVE_LIB_DIR) TRANSLATOR_MODEL_DIR=$(MODEL_DIR)
 
