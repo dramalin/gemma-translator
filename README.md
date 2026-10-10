@@ -4,14 +4,12 @@
 
 This repo was built with the assistance of [Google Antigravity](https://antigravity.google/) and includes code to run an on-device, fully offline voice translator powered by [Gemma 4](https://ai.google.dev/gemma/docs/core) and [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-lm). It is a single Rust program with a [Slint](https://slint.dev) UI optimized for small handheld displays (e.g., 480x320), plus a terminal UI. Speech recognition and text-to-speech are powered by [Moonshine](https://github.com/moonshine-ai/moonshine). All inference runs inside the program; there is no server process.
 
-https://github.com/user-attachments/assets/343072ce-dc78-44a7-a783-99312845cabe
-
 ## Features
 
 - **On-Device Inference**: Runs the `gemma4-e2b` model through LiteRT-LM, and Moonshine for speech, entirely locally. No internet required after setup.
 - **Voice Interface**: Captures microphone audio, transcribes it, translates it and speaks the result.
 - **Optimized UI**: Retro-terminal styling custom-built for small hardware screens (like Raspberry Pi displays), with a terminal UI for desktops and SSH sessions.
-- **One Program**: One binary, `translator` (or `translator-tui`), with the models in a folder next to it.
+- **One Program**: One binary, `translator` (or `translator-tui`), with the vendor libraries in `lib/` next to it and the models in one folder (`./models` on a desktop, `/var/lib/gemma-translator/models` on the Pi). No server process.
 
 ## Required Hardware
 
@@ -54,6 +52,14 @@ Native-library output goes to `~/.local/state/gemma-translator/translator-tui.lo
 Arabic is shown in logical order; right-to-left display depends on the terminal
 (Konsole and mlterm handle it). Without `COLORTERM=truecolor` the theme colour
 is approximated.
+
+### Log output
+
+LiteRT-LM and Moonshine print their own log lines to stderr. Lines such as
+`Creating Gemma4DataProcessor` (one per translation, because every translation
+starts a fresh conversation) and `mel_filterbank.cc ... Missing 10 bands`
+(from Gemma's audio front end, which the translator does not use) are normal
+and do not mean anything went wrong.
 
 ### macOS notes
 
@@ -98,6 +104,13 @@ translator instead of the desktop; the first start is slower. Running
 that did not change. Delete the tar once it is unpacked. The service always
 uses the installed models, whatever `model_dir` says in `config.toml`.
 
+To see the translator's output, or to restart it after changing something:
+
+```bash
+journalctl -u gemma-translator -f
+sudo systemctl restart gemma-translator
+```
+
 To go back to the desktop:
 
 ```bash
@@ -106,15 +119,14 @@ sudo systemctl disable gemma-translator && sudo systemctl set-default graphical.
 
 ## Settings
 
-Settings are stored in `~/.config/gemma-translator/config.toml`. Press `Esc` to open the settings panel (↑/↓ select, ←/→ change). Recordings shorter than 300 ms are ignored.
-
-## Upgrading from the Python/React version
-
-Delete `venv/` and `frontend/node_modules/` by hand; they are no longer used. Old HTTP settings in `config.toml` are ignored.
+Settings are stored in `~/.config/gemma-translator/config.toml` (or under `$XDG_CONFIG_HOME`; on the Pi, in the home directory of the user that ran `sudo ./install.sh`; `--config <path>` uses another file). Press `Esc` to open the settings panel (↑/↓ select, ←/→ change). Recordings shorter than 300 ms are ignored.
 
 ## Development
 
 ```bash
+make             # list every target
+make native-libs # fetch the pinned libmoonshine / liblitert-lm into native/<arch>/lib
+make models      # download the models into MODEL_DIR (default ./models)
 make test        # all Rust tests
 make clippy      # lint, warnings are errors
 make test-ffi    # tests that need the native libraries and models (after make models)
@@ -122,6 +134,12 @@ make test-soak   # long-running native memory test
 make fmt         # format the Rust code
 make clean       # remove target/ and dist/ (keeps native/ and models/)
 ```
+
+The native libraries are loaded at run time from the pinned vendor wheels;
+their function signatures are copied from the wheels' ctypes code, so re-check
+`moonshine-sys` and `litert-lm-sys` whenever `scripts/fetch-native-libs.sh`
+moves to a new version. `make test-ffi` output contains the libraries' log
+lines; count results from the `test result:` lines only.
 
 ## Project Structure
 
@@ -134,6 +152,7 @@ make clean       # remove target/ and dist/ (keeps native/ and models/)
 - `moonshine-sys/`, `litert-lm-sys/` - run-time bindings to the vendor libraries.
 - `deploy/` - Pi cross-build image, `install.sh` and the systemd unit template.
 - `scripts/` - setup, native-library fetch and Pi packaging scripts.
+- `docs/` - design specs and implementation plans.
 - `stl/` - STL files for 3D printing the hardware case.
 
 ## Keyboard Shortcuts
