@@ -13,6 +13,7 @@ make setup              # check system tools, fetch native libs and models (SETU
 make run                # Slint UI with in-process inference on MODEL_DIR (default ./models)
 make run-tui            # terminal UI (ARGS=--mock for mock services)
 make run-mock           # Slint UI with mock services
+make release            # optimized translator + translator-tui in target/release, native libs linked beside them
 make test               # cargo test --workspace
 make clippy             # clippy with -D warnings
 make fmt                # cargo fmt --all

@@ -49,6 +49,16 @@ run: native-libs
 run-tui: native-libs
 	$(call run_native,translator-tui,translator-tui)
 
+## release: optimized build of translator and translator-tui in target/release, with native libs linked next to them
+.PHONY: release
+release: native-libs
+	$(CARGO) build --release -p translator-ui -p translator-tui
+	target_dir=$$($(CARGO) metadata --format-version 1 --no-deps \
+		| sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p'); \
+	test -n "$$target_dir" || { echo "cargo metadata failed" >&2; exit 1; }; \
+	ln -sfn $(NATIVE_LIB_DIR) "$$target_dir/release/lib" && \
+	echo "built $$target_dir/release/translator and $$target_dir/release/translator-tui"
+
 ## native-libs: download libmoonshine / liblitert-lm into native/<arch>/lib (skipped when present; make -B native-libs refetches)
 .PHONY: native-libs
 native-libs: $(NATIVE_LIB_DIR)/.complete
