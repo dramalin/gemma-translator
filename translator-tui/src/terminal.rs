@@ -160,6 +160,7 @@ pub fn is_usable_term(term: Option<&str>) -> bool {
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
+    use std::os::fd::AsFd;
     use std::os::unix::fs::MetadataExt;
 
     use super::*;
@@ -214,14 +215,11 @@ mod tests {
 
     /// Device and inode of whatever fd 2 refers to.
     fn stderr_identity() -> (u64, u64) {
-        // SAFETY: `stat` is plain data, so all-zero is a valid value, and
-        // fstat only writes into it.
-        let (result, status) = unsafe {
-            let mut status: libc::stat = std::mem::zeroed();
-            (libc::fstat(2, &mut status), status)
-        };
-        assert_eq!(result, 0);
-        (status.st_dev, status.st_ino)
+        // A duplicate of fd 2 refers to the same file; std's metadata gives
+        // u64 dev/ino on every Unix (libc's `stat` fields differ by platform).
+        let stderr = std::io::stderr().as_fd().try_clone_to_owned().unwrap();
+        let metadata = std::fs::File::from(stderr).metadata().unwrap();
+        (metadata.dev(), metadata.ino())
     }
 
     fn file_identity(path: &Path) -> (u64, u64) {
