@@ -34,8 +34,10 @@ https://github.com/user-attachments/assets/343072ce-dc78-44a7-a783-99312845cabe
 libraries and models, imports Gemma for `litert-lm serve` and installs the
 frontend packages, skipping anything already there. It prints the install
 command for any missing tool instead of installing it; `make setup
-SETUP_ARGS=--yes` downloads the ~3.8 GB of models without asking. The steps
-below do the same by hand.
+SETUP_ARGS=--yes` downloads the ~3.8 GB of models without asking. Models
+downloaded before `make setup` existed have no completion stamp, so the
+first run asks once; answering yes only checks them and fetches nothing.
+The steps below do the same by hand.
 
 1. **Make Scripts Executable**
    Ensure the setup, download, start, and deployment scripts have execute permissions:

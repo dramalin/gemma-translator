@@ -48,7 +48,7 @@ Backend details (`backend/server.py`):
 - `/proxy` only allows targets on `localhost`/`127.0.0.1` port 9379.
 - STT recognizers and TTS engines are lazily loaded per language and cached in an LRU (`MAX_MODELS = 2`) guarded by **RLocks** — handlers hold the lock and re-enter it inside `get_*`, so a plain `Lock` would deadlock.
 - Supported languages are defined in two places that must stay in sync: `LANGUAGES` in `TranslatorApp.jsx` and `SUPPORTED_STT_LANGS` / `TTS_LANG_MAP` / `TTS_VOICE_MAP` in `server.py` (currently ar, en, es, ja, zh, ko).
-- `/api/volume` shells out to `wpctl` (PipeWire), falling back to `amixer`.
+- `/api/volume` uses `backend/volume.py`: `wpctl` (PipeWire), then `pactl`, then `amixer` on Linux; `osascript` on macOS.
 
 Frontend:
 - Input is keyboard-only (no touch controls). Two keyboard modes, `landscape` (default; Space switches active lane, Z records, ←/→ rotate language) and `vertical` (Z/X record per lane, ←/→ and −/+ per lane), persisted in `localStorage` key `keyboardMode`. Shortcuts are ignored while focus is in input/textarea/select, and language rotation is blocked during recording. See README for full tables.
