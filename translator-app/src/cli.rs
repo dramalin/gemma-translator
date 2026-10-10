@@ -8,12 +8,15 @@ use translator_core::config::Config;
 pub struct CliOptions {
     pub is_mock: bool,
     pub config_path: Option<PathBuf>,
+    /// Model directory for this run only; never written to the config file.
+    pub model_dir: Option<PathBuf>,
 }
 
 pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<CliOptions, String> {
     let mut options = CliOptions {
         is_mock: false,
         config_path: None,
+        model_dir: None,
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -22,6 +25,10 @@ pub fn parse_args(args: impl IntoIterator<Item = String>) -> Result<CliOptions, 
             "--config" => {
                 let path = args.next().ok_or("--config needs a path")?;
                 options.config_path = Some(PathBuf::from(path));
+            }
+            "--model-dir" => {
+                let path = args.next().ok_or("--model-dir needs a path")?;
+                options.model_dir = Some(PathBuf::from(path));
             }
             other => return Err(format!("unknown argument: {other}")),
         }
@@ -88,15 +95,39 @@ mod tests {
             parse_args(args(&["--mock", "--config", "/tmp/c.toml"])),
             Ok(CliOptions {
                 is_mock: true,
-                config_path: Some(PathBuf::from("/tmp/c.toml"))
+                config_path: Some(PathBuf::from("/tmp/c.toml")),
+                model_dir: None,
             })
         );
         assert_eq!(
             parse_args(args(&[])),
             Ok(CliOptions {
                 is_mock: false,
-                config_path: None
+                config_path: None,
+                model_dir: None,
             })
+        );
+    }
+
+    #[test]
+    fn parses_model_dir() {
+        assert_eq!(
+            parse_args(args(&[
+                "--mock",
+                "--model-dir",
+                "/repo/models",
+                "--config",
+                "/tmp/c.toml"
+            ])),
+            Ok(CliOptions {
+                is_mock: true,
+                config_path: Some(PathBuf::from("/tmp/c.toml")),
+                model_dir: Some(PathBuf::from("/repo/models")),
+            })
+        );
+        assert_eq!(
+            parse_args(args(&["--model-dir"])),
+            Err("--model-dir needs a path".to_string())
         );
     }
 

@@ -5,7 +5,7 @@ use std::ptr;
 use std::sync::Arc;
 
 use crate::ffi::{Transcript, MOONSHINE_ERROR_NONE, MOONSHINE_HEADER_VERSION};
-use crate::library::{c_string, MoonshineError, MoonshineLibrary};
+use crate::library::{c_string, MoonshineError, MoonshineLibrary, OptionArray};
 
 /// `moonshine_voice.ModelArch`
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,18 +32,20 @@ impl Transcriber {
         library: &Arc<MoonshineLibrary>,
         model_dir: &Path,
         arch: ModelArch,
+        options: &[(&str, &str)],
     ) -> Result<Transcriber, MoonshineError> {
         let path = model_dir.to_str().ok_or_else(|| {
             MoonshineError::InvalidArgument(format!("{} is not UTF-8", model_dir.display()))
         })?;
         let path = c_string(path)?;
-        // SAFETY: `path` is a valid C string; no options are passed.
+        let options = OptionArray::new(options)?;
+        // SAFETY: `path` is a valid C string and `options` a valid option array.
         let handle = unsafe {
             (library.load_transcriber_from_files)(
                 path.as_ptr(),
                 arch as u32,
-                ptr::null(),
-                0,
+                options.as_ptr(),
+                options.len(),
                 MOONSHINE_HEADER_VERSION,
             )
         };

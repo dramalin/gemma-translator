@@ -3829,6 +3829,8 @@ git commit -m "Let the UI run inference in-process when inference_backend is nat
 
 ## Manual checklist on the Pi 5 (spec §11 steps 7, 8 and 10; not executed by agents)
 
+**Status (2026-10-10): closed.** The user ran the Pi 5 checks and reported that all of them pass: spec §11 phase A step 1 (Slint on linuxkms), the phase A step 6 acceptance run, and phase B steps 7, 8 and 10 below. Not done yet: the deployment switch that follows phase A step 6, and step 11.
+
 Run these on a Pi 5 8GB with Raspberry Pi OS Bookworm (glibc 2.36):
 
 1. **Step 7 (FFI on aarch64):**

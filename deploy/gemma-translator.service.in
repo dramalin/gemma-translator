@@ -1,0 +1,23 @@
+[Unit]
+Description=Gemma Offline Translator
+# PipeWire runs in the user's session; install.sh enables linger so it starts at boot.
+Wants=user@{{UID}}.service
+After=sound.target user@{{UID}}.service getty@tty1.service
+# The translator draws on the display through KMS; keep the tty1 login prompt
+# off the screen and away from the keyboard while it runs.
+Conflicts=getty@tty1.service
+# Keep retrying after a crash loop instead of giving up.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User={{USER}}
+SupplementaryGroups=video input render audio
+Environment=XDG_RUNTIME_DIR=/run/user/{{UID}}
+# --model-dir is a run-time override, so the installed models win over any model_dir in config.toml.
+ExecStart=/opt/gemma-translator/translator --model-dir /var/lib/gemma-translator/models
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

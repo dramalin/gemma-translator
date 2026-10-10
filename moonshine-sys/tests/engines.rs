@@ -25,7 +25,7 @@ fn english_transcriber(library: &Arc<MoonshineLibrary>) -> Transcriber {
     let directory = env_dir("TRANSLATOR_MODEL_DIR")
         .join("stt")
         .join("medium-streaming-en");
-    Transcriber::load(library, &directory, ModelArch::MediumStreaming).unwrap()
+    Transcriber::load(library, &directory, ModelArch::MediumStreaming, &[]).unwrap()
 }
 
 fn english_speech(library: &Arc<MoonshineLibrary>) -> (Vec<f32>, u32) {
@@ -97,7 +97,7 @@ fn every_language_synthesizer_can_be_created() {
 fn missing_model_directory_is_an_error() {
     let library = library();
     let missing = tempfile::tempdir().unwrap().path().join("nothing-here");
-    assert!(Transcriber::load(&library, &missing, ModelArch::Base).is_err());
+    assert!(Transcriber::load(&library, &missing, ModelArch::Base, &[]).is_err());
 }
 
 /// Spec §11.1: nothing documents who frees `TranscriptC`. If the C side

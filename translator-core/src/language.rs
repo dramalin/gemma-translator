@@ -57,6 +57,16 @@ impl LanguageCode {
         }
     }
 
+    /// Name used in the translation prompt. Chinese is asked for in
+    /// Traditional characters, which the UI shows; speech recognition output is
+    /// converted to match before it is shown or translated.
+    pub fn prompt_name(self) -> &'static str {
+        match self {
+            LanguageCode::Zh => "Traditional Chinese",
+            other => other.display_name(),
+        }
+    }
+
     pub fn is_right_to_left(self) -> bool {
         matches!(self, LanguageCode::Ar)
     }

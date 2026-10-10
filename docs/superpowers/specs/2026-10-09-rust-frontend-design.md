@@ -292,14 +292,14 @@ model_dir = "/var/lib/gemma-translator/models"
 3. **`server.py` 新增 `/v2/stt`、`/v2/tts`**，舊端點不動。
 4. **`translator-io`**：cpal 錄放音、重新取樣、音量控制、HTTP 實作。
 5. **`translator-ui` mock 模式**：桌機完成全部畫面、設定頁與按鍵操作。
-6. **Pi 實測與驗收**（第 12 節），通過後切換部署並移除 `frontend/`。
+6. **Pi 實測與驗收**（第 12 節），通過後切換部署並移除 `frontend/`。（已完成，見 docs/superpowers/specs/2026-10-10-native-only-deployment-design.md）
 
 ### 階段 B
 7. **FFI 可行性實驗**：在 Pi 5 上以最小 Rust 程式驗證 11.1 節所有項目。
 8. **`translator-models`**：下載與準備全部模型；在乾淨的 Pi 上驗證，取代 `download_model.sh` 與 Python 下載邏輯。
 9. **`moonshine-sys`、`litert-lm-sys`** 與 `translator-io` 的 FFI 實作。
 10. **Pi 實測與驗收**，包含長時間執行測試。
-11. **切換部署並清理**：移除 `backend/`、`setup.sh`、`start.sh`、`download_model.sh`、venv；更新 README 與 CLAUDE.md。必須在步驟 8 完成後才能移除 Python 工具。
+11. **切換部署並清理**：移除 `backend/`、`setup.sh`、`start.sh`、`download_model.sh`、venv；更新 README 與 CLAUDE.md。必須在步驟 8 完成後才能移除 Python 工具。（已完成，見 docs/superpowers/specs/2026-10-10-native-only-deployment-design.md）
 
 ### 11.1 階段 B 實驗必須驗證的項目
 

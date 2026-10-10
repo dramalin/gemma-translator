@@ -147,6 +147,16 @@ impl TextToSpeech for ScriptedTts {
     }
 }
 
+/// Records the text it is asked to speak.
+struct RecordingTts(Arc<Mutex<Vec<String>>>);
+
+impl TextToSpeech for RecordingTts {
+    fn synthesize(&self, text: &str, _language: LanguageCode) -> Result<AudioClip, PipelineError> {
+        self.0.lock().unwrap().push(text.to_string());
+        Ok(clip())
+    }
+}
+
 /// Records speech queued through the cancel-checked path; `unchecked_enqueues`
 /// counts clips queued without that check (the runner must never do that).
 #[derive(Default)]
@@ -254,6 +264,36 @@ fn full_job_speaks_every_sentence() {
     );
     assert_eq!(sink.clips.lock().unwrap().len(), 2);
     assert_eq!(sink.unchecked_enqueues.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn chinese_is_shown_in_traditional_and_spoken_from_simplified() {
+    let spoken = Arc::new(Mutex::new(Vec::new()));
+    let (runner, _sink, receiver) = runner(
+        ScriptedStt(Ok("请问地铁站怎么走？".to_string())),
+        ScriptedTranslator(vec!["最近的捷運站在哪裡？"]),
+        RecordingTts(Arc::clone(&spoken)),
+    );
+    let mut chinese_to_chinese = request(1, true);
+    chinese_to_chinese.source = LanguageCode::Zh;
+    chinese_to_chinese.target = LanguageCode::Zh;
+    runner.start(chinese_to_chinese, Box::new(|| vec![0.0; 16_000]));
+    let job = JobId(1);
+    let events = events(&receiver);
+    assert_eq!(
+        events[..2],
+        [
+            JobEvent::Transcribed {
+                job,
+                text: "請問地鐵站怎麼走？".to_string()
+            },
+            JobEvent::SentenceTranslated {
+                job,
+                sentence: "最近的捷運站在哪裡？".to_string()
+            },
+        ]
+    );
+    assert_eq!(*spoken.lock().unwrap(), ["最近的捷运站在哪里？"]);
 }
 
 #[test]

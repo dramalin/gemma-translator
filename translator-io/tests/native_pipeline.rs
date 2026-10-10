@@ -1,5 +1,5 @@
 //! Whole job (speech → text → translation → speech) through JobRunner with
-//! the in-process services, as the UI runs it with inference_backend = "native".
+//! the in-process native services, as the UI runs it.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

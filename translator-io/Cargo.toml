@@ -6,13 +6,14 @@ license.workspace = true
 
 [dependencies]
 translator-core = { path = "../translator-core" }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-ureq = { version = "2.12", default-features = false }
 cpal = "0.15"
 thiserror = "2"
 moonshine-sys = { path = "../moonshine-sys" }
 litert-lm-sys = { path = "../litert-lm-sys" }
+
+# Traditional/Simplified Chinese conversion around the speech engines. Only the
+# OpenCC dictionaries (Apache-2.0): the default MediaWiki tables are GPL-2.0.
+zhconv = { version = "0.4.2", default-features = false, features = ["opencc", "compress"] }
 
 [dev-dependencies]
 tempfile = "3"

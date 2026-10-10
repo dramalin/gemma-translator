@@ -14,7 +14,7 @@ use translator_app::{AppState, KeyAction, RecordStyle};
 use translator_core::config::Config;
 use translator_core::keys::Key;
 
-const USAGE: &str = "usage: translator [--mock] [--config <path>]";
+const USAGE: &str = "usage: translator [--mock] [--config <path>] [--model-dir <path>]";
 /// Job events, visualizer and rendering are updated at ~33 fps.
 const FRAME_INTERVAL: Duration = Duration::from_millis(30);
 
@@ -43,6 +43,7 @@ fn main() -> ExitCode {
         config_path,
         options.is_mock,
         RecordStyle::Hold,
+        options.model_dir,
     )));
     let models = Rc::new(render::Models::bind(&window));
     render::render(&state.borrow().view(), &window, &models);

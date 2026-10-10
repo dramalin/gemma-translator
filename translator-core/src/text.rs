@@ -23,8 +23,8 @@ pub fn translation_system_prompt(source: LanguageCode, target: LanguageCode) -> 
     format!(
         "You are a translator. Translate the user's text from {} into {}. \
          Output only the translation, with no explanations, notes, quotes or formatting.",
-        source.display_name(),
-        target.display_name()
+        source.prompt_name(),
+        target.prompt_name()
     )
 }
 
@@ -194,6 +194,14 @@ mod tests {
         let prompt = translation_system_prompt(LanguageCode::En, LanguageCode::Ja);
         assert!(prompt.contains("from English into Japanese"));
         assert!(prompt.contains("Output only the translation"));
+    }
+
+    #[test]
+    fn prompt_asks_for_traditional_chinese() {
+        let prompt = translation_system_prompt(LanguageCode::Zh, LanguageCode::En);
+        assert!(prompt.contains("from Traditional Chinese into English"));
+        let prompt = translation_system_prompt(LanguageCode::Ko, LanguageCode::Zh);
+        assert!(prompt.contains("from Korean into Traditional Chinese"));
     }
 
     #[test]

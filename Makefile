@@ -1,11 +1,9 @@
 # Gemma Translator (Rust UI) — build orchestration.
-# `make run-mock` works on any Linux or macOS desktop; `build-pi` targets the Raspberry Pi.
+# `make run-mock` works on any Linux or macOS desktop; `package-pi` builds the Raspberry Pi package.
 
 CARGO     := cargo
-PI_TARGET := aarch64-unknown-linux-gnu
 NATIVE_ARCH    := $(shell uname -m)
 NATIVE_LIB_DIR := $(CURDIR)/native/$(NATIVE_ARCH)/lib
-PYTHON         := $(if $(wildcard venv/bin/python3),venv/bin/python3,python3)
 
 .DEFAULT_GOAL := help
 
@@ -19,35 +17,37 @@ help:
 setup:
 	scripts/setup-env.sh $(SETUP_ARGS)
 
-## test: run Rust and Python unit tests
+## test: run the Rust tests
 .PHONY: test
 test:
 	$(CARGO) test --workspace
-	$(PYTHON) -m unittest discover -s backend -p 'test_*.py'
 
 ## run-mock: run the UI on the desktop with mock speech and translation
 .PHONY: run-mock
 run-mock:
 	$(CARGO) run -p translator-ui -- --mock
 
-## run-tui: run the terminal UI (make run-tui ARGS=--mock for mock services)
-.PHONY: run-tui
-run-tui:
-	$(CARGO) run -p translator-tui -- $(ARGS)
-
-## run: run the UI against the local speech service and litert-lm
-.PHONY: run
-run:
-	$(CARGO) run -p translator-ui
-
-## run-native: run the UI with in-process inference (config: inference_backend = "native", model_dir = "<repo>/models")
-.PHONY: run-native
-run-native: native-libs
-	$(CARGO) build -p translator-ui
+# Builds package $(1), links native/<arch>/lib next to its debug executable
+# (the native libraries load from <exe dir>/lib) and runs binary $(2) on the
+# models in MODEL_DIR.
+define run_native
+	$(CARGO) build -p $(1)
 	target_dir=$$($(CARGO) metadata --format-version 1 --no-deps \
 		| sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p'); \
 	test -n "$$target_dir" || { echo "cargo metadata failed" >&2; exit 1; }; \
-	ln -sfn $(NATIVE_LIB_DIR) "$$target_dir/debug/lib" && "$$target_dir/debug/translator"
+	ln -sfn $(NATIVE_LIB_DIR) "$$target_dir/debug/lib" && \
+	"$$target_dir/debug/$(2)" --model-dir $(MODEL_DIR) $(ARGS)
+endef
+
+## run: run the Slint UI with in-process inference on MODEL_DIR (default ./models)
+.PHONY: run
+run: native-libs
+	$(call run_native,translator-ui,translator)
+
+## run-tui: run the terminal UI with in-process inference (ARGS=--mock for mock services)
+.PHONY: run-tui
+run-tui: native-libs
+	$(call run_native,translator-tui,translator-tui)
 
 ## native-libs: download libmoonshine / liblitert-lm into native/<arch>/lib (skipped when present; make -B native-libs refetches)
 .PHONY: native-libs
@@ -88,7 +88,7 @@ fmt:
 clippy:
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
-## build-pi: release build for the Pi with the KMS backend (needs the aarch64 toolchain)
-.PHONY: build-pi
-build-pi:
-	$(CARGO) build --release -p translator-ui --no-default-features --features kms --target $(PI_TARGET)
+## package-pi: build dist/gemma-translator-pi.tar for the Raspberry Pi 5 (x86_64 Linux; needs cross 0.2.5 and Docker)
+.PHONY: package-pi
+package-pi:
+	MODEL_DIR=$(MODEL_DIR) scripts/package-pi.sh

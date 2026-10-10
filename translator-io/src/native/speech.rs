@@ -171,8 +171,13 @@ impl SpeechEngines {
             language,
             || require_files(&directory, model.components),
             || {
-                Transcriber::load(library, &directory, model_arch(model.arch))
-                    .map_err(|error| engine_error(SERVICE, error))
+                Transcriber::load(
+                    library,
+                    &directory,
+                    model_arch(model.arch),
+                    language.transcriber_options(),
+                )
+                .map_err(|error| engine_error(SERVICE, error))
             },
         )
     }

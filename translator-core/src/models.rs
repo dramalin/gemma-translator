@@ -54,6 +54,12 @@ const ENGLISH_STREAMING_COMPONENTS: &[&str] = &[
     "decoder_kv_with_attention.ort",
 ];
 
+/// Moonshine stops decoding after this many tokens per second of audio. Its
+/// default suits alphabetic scripts, but a CJK character takes several
+/// byte-level tokens, so the default cuts ja/zh/ko sentences short; 13 was
+/// measured to end the truncation. The value was first found with the old Python backend.
+const CJK_TRANSCRIBER_OPTIONS: &[(&str, &str)] = &[("max_tokens_per_second", "13.0")];
+
 impl TtsVoice {
     /// Options for `moonshine_create_tts_synthesizer_from_files` and
     /// `moonshine_get_tts_dependencies`.
@@ -103,6 +109,14 @@ impl LanguageCode {
                 download_url: "https://download.moonshine.ai/model/tiny-ko/quantized/tiny-ko",
                 components: NON_STREAMING_COMPONENTS,
             },
+        }
+    }
+
+    /// Options for `moonshine_load_transcriber_from_files`.
+    pub fn transcriber_options(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            LanguageCode::Ja | LanguageCode::Zh | LanguageCode::Ko => CJK_TRANSCRIBER_OPTIONS,
+            LanguageCode::Ar | LanguageCode::En | LanguageCode::Es => &[],
         }
     }
 
@@ -204,6 +218,19 @@ mod tests {
                     language.code()
                 )
             );
+        }
+    }
+
+    #[test]
+    fn only_cjk_transcribers_raise_the_token_limit() {
+        for language in LanguageCode::ALL {
+            let expected: &[(&str, &str)] = match language {
+                LanguageCode::Ja | LanguageCode::Zh | LanguageCode::Ko => {
+                    &[("max_tokens_per_second", "13.0")]
+                }
+                _ => &[],
+            };
+            assert_eq!(language.transcriber_options(), expected, "{language:?}");
         }
     }
 

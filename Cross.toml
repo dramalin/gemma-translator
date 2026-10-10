@@ -1,0 +1,4 @@
+# Build the Pi binary in a Debian bookworm image that matches Raspberry Pi OS
+# (see deploy/Dockerfile.pi) instead of cross's default aarch64 image.
+[target.aarch64-unknown-linux-gnu]
+dockerfile = "deploy/Dockerfile.pi"

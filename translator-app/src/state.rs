@@ -2,12 +2,12 @@
 //! commands and carries out the controller's effects on the audio devices,
 //! job runner and config file.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 use std::time::Instant;
 
-use translator_core::config::{Config, InferenceBackend};
+use translator_core::config::Config;
 use translator_core::controller::{Controller, Effect, JobEvent, Phase};
 use translator_core::keys::{
     command_for_key_press, command_for_key_release, command_for_key_toggle, Command, Key,
@@ -19,11 +19,9 @@ use translator_core::pipeline::STT_SAMPLE_RATE;
 use translator_core::settings::SettingsCursor;
 use translator_io::audio_device::{AudioPlayer, AudioRecorder, CapturedAudio};
 use translator_io::blip::{synthesize_blip, BLIP_SAMPLE_RATE};
-use translator_io::llm_client::LlmClient;
 use translator_io::native::{self, speech::NativeSpeech, translator::NativeTranslator};
 use translator_io::playback_queue::{DiscardingSink, PlaybackSink};
 use translator_io::runner::{JobRunner, Services};
-use translator_io::speech_client::SpeechServiceClient;
 use translator_io::volume::{CommandRunner, SystemCommandRunner, VolumeWorker};
 
 use crate::mock;
@@ -125,11 +123,13 @@ impl AppState {
     /// Opens the configured (or default) microphone and speaker; without them
     /// it records silence and discards audio, so jobs still run, and
     /// `AppView::audio_warning` says why.
+    /// `model_dir_override` (from `--model-dir`) replaces `config.model_dir` for this run only; the saved config keeps its own value.
     pub fn new(
         config: Config,
         config_path: Option<PathBuf>,
         is_mock: bool,
         record_style: RecordStyle,
+        model_dir_override: Option<PathBuf>,
     ) -> Self {
         let mut warnings = Vec::new();
         let capture = match AudioRecorder::open(config.audio_input_device.as_deref()) {
@@ -155,7 +155,7 @@ impl AppState {
         let services = if is_mock {
             mock::services()
         } else {
-            configured_services(&config)
+            native_services(&config, model_dir_override.as_deref())
         };
         Self::assemble(
             config,
@@ -366,26 +366,11 @@ impl AppState {
     }
 }
 
-/// The HTTP services (phase A) or the in-process ones, per the config.
-fn configured_services(config: &Config) -> Services {
-    match config.inference_backend {
-        InferenceBackend::Http => {
-            let speech = Arc::new(SpeechServiceClient::new(&config.speech_service_url));
-            Services {
-                stt: speech.clone(),
-                translator: Arc::new(LlmClient::new(&config.llm_endpoint, &config.llm_model)),
-                tts: speech,
-            }
-        }
-        InferenceBackend::Native => native_services(config),
-    }
-}
-
 /// In-process inference: one speech thread (preloading both lanes' languages)
 /// and one model thread, both loading their libraries from `<exe dir>/lib`.
-fn native_services(config: &Config) -> Services {
+fn native_services(config: &Config, model_dir_override: Option<&Path>) -> Services {
     let lib_dir = native::default_lib_dir();
-    let paths = ModelPaths::new(&config.model_dir);
+    let paths = ModelPaths::new(model_root(config, model_dir_override));
     let speech = Arc::new(NativeSpeech::spawn(
         lib_dir.clone(),
         paths.clone(),
@@ -398,6 +383,11 @@ fn native_services(config: &Config) -> Services {
     }
 }
 
+/// The model directory: the `--model-dir` override for this run, else the config's.
+fn model_root(config: &Config, model_dir_override: Option<&Path>) -> PathBuf {
+    model_dir_override.map_or_else(|| config.model_dir.clone(), Path::to_path_buf)
+}
+
 #[cfg(test)]
 mod tests {
     use std::thread;
@@ -406,6 +396,27 @@ mod tests {
     use translator_core::controller::MIN_RECORDING_DURATION;
 
     use super::*;
+
+    #[test]
+    fn override_reaches_only_the_model_paths() {
+        let config = Config {
+            model_dir: PathBuf::from("/var/lib/gemma-translator/models"),
+            ..Config::default()
+        };
+        assert_eq!(
+            model_root(&config, Some(Path::new("/repo/models"))),
+            PathBuf::from("/repo/models")
+        );
+        assert_eq!(
+            model_root(&config, None),
+            PathBuf::from("/var/lib/gemma-translator/models")
+        );
+        // The override is a separate value: the config that gets saved is untouched.
+        assert_eq!(
+            config.model_dir,
+            PathBuf::from("/var/lib/gemma-translator/models")
+        );
+    }
 
     /// Ticks until `done(view)` holds, failing after 10 s.
     fn tick_until(state: &mut AppState, done: impl Fn(&AppView) -> bool) -> AppView {

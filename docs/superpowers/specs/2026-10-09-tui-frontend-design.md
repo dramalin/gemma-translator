@@ -18,7 +18,7 @@
 - 在 SSH 連線的終端機裡能完整翻譯一輪：錄音、辨識、翻譯、播放。
 - 中日韓文正確顯示。
 - 阿拉伯文內容可以讀；從右到左的顯示取決於終端機（第 5.5 節）。
-- `--mock`、`inference_backend = "http"`、`inference_backend = "native"` 三種模式都能用。
+- `--mock` 與原生推論兩種模式都能用。
 - 跟 Slint 版共用 `~/.config/gemma-translator/config.toml`。
 
 ### 不在範圍

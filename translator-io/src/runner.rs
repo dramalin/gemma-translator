@@ -12,6 +12,7 @@ use std::time::Duration;
 use translator_core::controller::{JobEvent, JobId, JobRequest};
 use translator_core::pipeline::{SpeechToText, TextToSpeech, Translator};
 
+use crate::chinese_script::{displayed_transcript, spoken_text};
 use crate::playback_queue::PlaybackSink;
 
 const PLAYBACK_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -126,7 +127,7 @@ fn run_stages(context: JobContext, request: JobRequest, samples: Vec<f32>) {
     };
 
     let transcript = match services.stt.transcribe(&samples, request.source) {
-        Ok(text) => text,
+        Ok(text) => displayed_transcript(&text, request.source).into_owned(),
         Err(error) => {
             emit(JobEvent::Failed {
                 job,
@@ -158,7 +159,7 @@ fn run_stages(context: JobContext, request: JobRequest, samples: Vec<f32>) {
                 if cancel.load(Ordering::SeqCst) {
                     break;
                 }
-                match tts.synthesize(&sentence, target) {
+                match tts.synthesize(&spoken_text(&sentence, target), target) {
                     Ok(clip) => playback.enqueue_unless_cancelled(clip, &cancel),
                     Err(error) => {
                         fail(&cancel, &on_event, job, error.to_string());

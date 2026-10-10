@@ -2,22 +2,16 @@
 
 # Gemma Translator
 
-This repo was built with the assistance of [Google Antigravity](https://antigravity.google/) and includes code to run an on-device, fully offline voice translator powered by [Gemma 4](https://ai.google.dev/gemma/docs/core) and [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-lm). This project features a web frontend optimized for small handheld displays (e.g., 480x320) and a Python API server (`http.server`) that communicates with Gemma. Text-to-speech is powered by [Moonshine](https://github.com/moonshine-ai/moonshine).
+This repo was built with the assistance of [Google Antigravity](https://antigravity.google/) and includes code to run an on-device, fully offline voice translator powered by [Gemma 4](https://ai.google.dev/gemma/docs/core) and [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-lm). It is a single Rust program with a [Slint](https://slint.dev) UI optimized for small handheld displays (e.g., 480x320), plus a terminal UI. Speech recognition and text-to-speech are powered by [Moonshine](https://github.com/moonshine-ai/moonshine). All inference runs inside the program; there is no server process.
 
 https://github.com/user-attachments/assets/343072ce-dc78-44a7-a783-99312845cabe
 
 ## Features
 
-- **On-Device Inference**: Uses LiteRT-LM to run the `gemma4-e2b` model entirely locally. No internet required after setup.
-- **Voice Interface**: Captures microphone audio, processes it, and sends it to the local model.
-- **Optimized UI**: Retro-terminal styling custom-built for small hardware screens (like Raspberry Pi displays).
-- **Unified Startup**: One script to launch the LLM server, the Python API, and the React frontend.
-
-## Prerequisites
-
-- Python 3.10+
-- Node.js 18+ (20 LTS recommended) & npm — installed automatically by `deploy-pi.sh` on Raspberry Pi OS / Debian
-- Linux, or macOS 15+ on Apple Silicon (see [macOS](#macos-apple-silicon))
+- **On-Device Inference**: Runs the `gemma4-e2b` model through LiteRT-LM, and Moonshine for speech, entirely locally. No internet required after setup.
+- **Voice Interface**: Captures microphone audio, transcribes it, translates it and speaks the result.
+- **Optimized UI**: Retro-terminal styling custom-built for small hardware screens (like Raspberry Pi displays), with a terminal UI for desktops and SSH sessions.
+- **One Program**: One binary, `translator` (or `translator-tui`), with the models in a folder next to it.
 
 ## Required Hardware
 
@@ -28,151 +22,122 @@ https://github.com/user-attachments/assets/343072ce-dc78-44a7-a783-99312845cabe
 
 <img width="3024" height="1672" src="https://storage.googleapis.com/experiments-uploads/gemma-translator/gemma-translator-cad.gif" />
 
-## Setup Instructions
+## Prerequisites
 
-`make setup` checks the system tools, then creates `venv/`, fetches the native
-libraries and models, imports Gemma for `litert-lm serve` and installs the
-frontend packages, skipping anything already there. It prints the install
-command for any missing tool instead of installing it; `make setup
-SETUP_ARGS=--yes` downloads the ~3.8 GB of models without asking. Models
-downloaded before `make setup` existed have no completion stamp, so the
-first run asks once; answering yes only checks them and fetches nothing.
-The steps below do the same by hand.
+- Rust, installed with [rustup](https://rustup.rs)
+- Linux: `make`, `patchelf`, `pkg-config`, `libasound2-dev`, `libfontconfig1-dev`, `libvulkan1`, `unzip`, `curl`
+- macOS 15+ on Apple Silicon: the Xcode Command Line Tools (`xcode-select --install`)
 
-1. **Make Scripts Executable**
-   Ensure the setup, download, start, and deployment scripts have execute permissions:
-   ```bash
-   chmod +x setup.sh download_model.sh start.sh deploy-pi.sh
-   ```
+`make setup` checks these tools and prints the install command for anything missing.
 
-2. **Install Dependencies**
-   Run the setup script to create a Python virtual environment (`venv`) and install all required packages:
-   ```bash
-   ./setup.sh
-   ```
-
-3. **Download the Model**
-   Run the model downloader script to fetch the `gemma4-e2b` model from Hugging Face and import it into LiteRT-LM:
-   ```bash
-   ./download_model.sh
-   ```
-
-## Running the Application
-
-Start all services (LiteRT-LM, the Python API server, and the Vite Web UI) in development mode:
-```bash
-./start.sh
-```
-
-To run in production mode (skipping Vite dev server and serving compiled UI assets from `frontend/dist/` via `backend/server.py` on port 3000):
-```bash
-./start.sh --prod
-```
-
-The application will be accessible at:
-- **Web UI (Dev)**: `http://localhost:5173`
-- **Web UI (Prod) / API server**: `http://localhost:3000`
-- **LiteRT-LM**: `http://localhost:9379`
-
-## Raspberry Pi Appliance Deployment
-
-To deploy as a permanent systemd kiosk service on a Raspberry Pi 5 (8GB):
-```bash
-./deploy-pi.sh
-```
-This automated script installs Debian audio/venv packages, sets up the Python environment, builds production UI assets, downloads the LiteRT model, registers the systemd unit from `deploy/gemma-translator.service`, and configures LXDE GUI autostart (`~/.config/lxsession/rpd-x/autostart`) to launch Chromium in kiosk mode pointing to `http://localhost:3000`.
-
-## Rust UI (experimental)
-
-A native Rust + [Slint](https://slint.dev) replacement for the Chromium kiosk UI lives in the Cargo workspace at the repo root (`translator-core`, `translator-io`, `translator-ui`). It records and plays audio itself and calls the Python service's `/v2/stt` and `/v2/tts` endpoints and `litert-lm serve` directly. See `docs/superpowers/specs/2026-10-09-rust-frontend-design.md`.
-
-Building needs Rust (stable) and the ALSA and fontconfig development headers (`sudo apt install libasound2-dev libfontconfig1-dev` on Debian/Raspberry Pi OS).
+## Desktop (Linux or macOS)
 
 ```bash
-make test       # Rust + Python unit tests
-make run-mock   # desktop UI with mock speech/translation (no models needed)
-make run        # desktop UI against backend/server.py and litert-lm
-make build-pi   # release build for the Pi (KMS backend, aarch64)
+make setup           # checks the tools, fetches the native libraries and the ~3.8 GB of models
+make run             # Slint window, in-process inference
+make run-tui         # terminal UI, in-process inference
+make run-mock        # Slint window with mock speech and translation (no models needed)
+make run-tui ARGS=--mock   # terminal UI with mock services (still fetches the native libraries first, unlike make run-mock)
 ```
 
-Settings are stored in `~/.config/gemma-translator/config.toml`. In the Rust UI, `Esc` opens the settings page (↑/↓ select, ←/→ change); all other keys match the tables above. Recordings shorter than 300 ms are ignored.
+`make setup SETUP_ARGS=--yes` downloads the models without asking. The models live in `./models`; `make run` and `make run-tui` pass `--model-dir <repo>/models` (an absolute path) to the program. Set `MODEL_DIR=/path` to use another folder, or run the binary yourself with `--model-dir <path>` (a run-time override that is never written to the config file; ignored with `--mock`).
 
 ### Terminal UI
 
 `translator-tui` is the same translator in a terminal, for a desktop terminal
-or an SSH session (audio uses the machine it runs on):
+or an SSH session (audio uses the machine it runs on). Terminals do not report
+key releases, so recording toggles: tap `Z` (or `Z`/`X` in vertical mode) to
+start and tap again to stop. Holding the key, or tapping it again within 1 s,
+counts as one tap. `Esc` opens settings and `Ctrl-C` quits; Ctrl-Z does not
+suspend. A missing microphone or speaker is shown on the status line.
+Native-library output goes to `~/.local/state/gemma-translator/translator-tui.log`.
+Arabic is shown in logical order; right-to-left display depends on the terminal
+(Konsole and mlterm handle it). Without `COLORTERM=truecolor` the theme colour
+is approximated.
 
-```bash
-make run-tui ARGS=--mock   # mock services
-make run-tui               # uses inference_backend from the config
-```
-
-Terminals do not report key releases, so recording toggles: tap `Z` (or `Z`/`X`
-in vertical mode) to start and tap again to stop. Holding the key, or tapping
-it again within 1 s, counts as one tap. `Esc` opens settings and `Ctrl-C`
-quits; Ctrl-Z does not suspend. A missing microphone or speaker is shown on
-the status line. Native-library output goes to
-`~/.local/state/gemma-translator/translator-tui.log`. Arabic is shown in
-logical order; right-to-left display depends on the terminal (Konsole and
-mlterm handle it). Without `COLORTERM=truecolor` the theme colour is
-approximated.
-
-### In-process inference (phase B, experimental)
-
-The `translator` binary can run speech recognition, translation and speech
-synthesis itself, without `server.py` or `litert-lm serve`:
-
-```bash
-sudo apt-get install -y patchelf unzip libvulkan1   # Linux; macOS needs none of these
-make native-libs     # pinned libmoonshine / liblitert-lm into native/<arch>/lib
-make models          # ~3.8 GB of models into ./models (MODEL_DIR=... to change)
-make test-ffi        # FFI tests against those libraries and models
-```
-
-Then set in `~/.config/gemma-translator/config.toml`:
-
-```toml
-inference_backend = "native"
-model_dir = "/path/to/models"
-```
-
-and start it with `make run-native`. The libraries are loaded from `lib/`
-next to the executable. `make test-soak` runs the long memory test.
-
-## macOS (Apple Silicon)
+### macOS notes
 
 Needs macOS 15 or later on an M-series Mac (moonshine-voice publishes no
-Intel macOS build) and the Xcode Command Line Tools
-(`xcode-select --install`); Homebrew is the easiest way to get Python 3.12
-and Node.js.
+Intel macOS build). The native libraries are the `.dylib` files from the
+pinned macOS wheels in `native/arm64/lib`. Volume keys change the system
+output volume through `osascript`. The first recording asks whether your
+terminal app may use the microphone; if it was denied, enable it under System
+Settings → Privacy & Security → Microphone and restart the terminal.
+
+## Raspberry Pi 5
+
+Supported system: Raspberry Pi OS Bookworm, 64-bit, desktop. The Pi gets a
+self-contained package that you build on an x86_64 Linux machine.
+
+On the build machine you need Docker, then:
 
 ```bash
-make setup           # lists anything missing, then fetches the rest
-make run-native      # Slint window, in-process inference
-make run-tui         # terminal UI (set inference_backend in the config)
-./start.sh           # Python backend + React UI on http://localhost:5173
+cargo install cross --version 0.2.5 --locked
+rustup target add aarch64-unknown-linux-gnu
+make models          # skip when ./models is already complete
+make package-pi      # writes dist/gemma-translator-pi.tar
 ```
 
-The native libraries are the `.dylib` files from the pinned macOS wheels in
-`native/arm64/lib`. Volume keys change the system output volume through
-`osascript`. The first recording asks whether your terminal app may use the
-microphone; if it was denied, enable it under System Settings → Privacy &
-Security → Microphone and restart the terminal.
+The tar is about 4.0 GB, which is more than a FAT32 drive can hold in one
+file, so copy it with `scp` or on an exFAT or ext4 drive. The install needs
+about 12 GB free on the Pi (the tar, the unpacked package and the installed
+models). Unpack it in your home directory, not in `/opt/gemma-translator` or
+`/var/lib/gemma-translator`, then:
+
+```bash
+tar -xf gemma-translator-pi.tar && cd gemma-translator && sudo ./install.sh
+```
+
+No network is needed on the Pi. `install.sh` checks the system and the runtime
+packages before it changes anything; if it lists missing packages, install
+them with the printed apt command and run it again. It installs the program
+into `/opt/gemma-translator`, the models into `/var/lib/gemma-translator/models`
+and a systemd service. After a reboot the Pi starts straight into the
+translator instead of the desktop; the first start is slower. Running
+`install.sh` again from a newer package updates the program and skips models
+that did not change. Delete the tar once it is unpacked. The service always
+uses the installed models, whatever `model_dir` says in `config.toml`.
+
+To go back to the desktop:
+
+```bash
+sudo systemctl disable gemma-translator && sudo systemctl set-default graphical.target
+```
+
+## Settings
+
+Settings are stored in `~/.config/gemma-translator/config.toml`. Press `Esc` to open the settings panel (↑/↓ select, ←/→ change). Recordings shorter than 300 ms are ignored.
+
+## Upgrading from the Python/React version
+
+Delete `venv/` and `frontend/node_modules/` by hand; they are no longer used. Old HTTP settings in `config.toml` are ignored.
+
+## Development
+
+```bash
+make test        # all Rust tests
+make clippy      # lint, warnings are errors
+make test-ffi    # tests that need the native libraries and models (after make models)
+make test-soak   # long-running native memory test
+make fmt         # format the Rust code
+```
 
 ## Project Structure
 
-- `frontend/` - React (Vite) web frontend (`index.html`, `src/`, styles, and Vite configuration).
-- `backend/` - Python API server (`server.py` and `requirements.txt`) for Moonshine STT, moonshine-voice TTS, and model proxying.
-- `deploy/` - Parameterizable systemd service unit template (`gemma-translator.service`).
+- `translator-core/` - pure logic: languages, key mapping, sentence splitting, config, the controller state machine.
+- `translator-io/` - audio, volume and the in-process inference jobs.
+- `translator-app/` - UI-independent application state shared by both frontends.
+- `translator-ui/` - the Slint program `translator`.
+- `translator-tui/` - the terminal program `translator-tui`.
+- `translator-models/` - downloads the models.
+- `moonshine-sys/`, `litert-lm-sys/` - run-time bindings to the vendor libraries.
+- `deploy/` - Pi cross-build image, `install.sh` and the systemd unit template.
+- `scripts/` - setup, native-library fetch and Pi packaging scripts.
 - `stl/` - STL files for 3D printing the hardware case.
-- `setup.sh` - Automates Python virtual environment creation and dependency installation.
-- `download_model.sh` - Fetches the required LiteRT model.
-- `start.sh` - Multi-process launcher supporting `--prod` and development modes.
-- `deploy-pi.sh` - One-command Raspberry Pi automated deployment script.
 
 ## Keyboard Shortcuts
 
-The Gemma Translator supports **two keyboard modes**. Switch between them anytime from the **Settings panel → "Keyboard Mode"** dropdown. The choice is remembered across restarts (stored in the browser's `localStorage` under the key `keyboardMode`).
+The Gemma Translator supports **two keyboard modes**. Switch between them anytime from the settings panel (Esc) or by editing `config.toml`; the choice is remembered across restarts.
 
 The app has two lanes (two people facing each other on the kiosk):
 - **Lane 1 / Person 1** — the left/top lane.
@@ -211,12 +176,11 @@ Notes:
 - Best for two operators, each handling their own side.
 
 ### Common behavior (both modes)
-- **Input focus guard:** all shortcuts are ignored while focus is on a configuration field (`<input>`, `<textarea>`, or `<select>`) — e.g. when editing the API endpoint or settings.
 - **Recording lock:** language rotation is blocked while a recording is in progress.
-- **Keyboard-driven:** recording and language rotation are keyboard-only in the current build; on-screen touch controls are not enabled.
+- **Keyboard-driven:** recording and language rotation are keyboard-only; there are no on-screen touch controls.
 
 ### Switching modes
-Open **Settings (⚙)** → **Keyboard Mode** → choose **Landscape** or **Vertical**. The change takes effect immediately and persists on the device.
+Open the settings panel (Esc) and choose **Landscape** or **Vertical**, or edit `config.toml`. The change takes effect immediately and persists on the device.
 
 | Setting value | Mode |
 | :--- | :--- |

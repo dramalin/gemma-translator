@@ -22,7 +22,7 @@ use crate::terminal::{
     is_usable_term, leave, log_path, StderrRedirect, Tui,
 };
 
-const USAGE: &str = "usage: translator-tui [--mock] [--config <path>]";
+const USAGE: &str = "usage: translator-tui [--mock] [--config <path>] [--model-dir <path>]";
 /// Job events, visualizer and drawing are updated at ~33 fps.
 const FRAME_INTERVAL: Duration = Duration::from_millis(30);
 
@@ -65,7 +65,13 @@ fn main() -> ExitCode {
     install_quit_signals();
     let is_truecolor = is_truecolor(std::env::var("COLORTERM").ok().as_deref());
 
-    let mut state = AppState::new(config, config_path, options.is_mock, RecordStyle::Toggle);
+    let mut state = AppState::new(
+        config,
+        config_path,
+        options.is_mock,
+        RecordStyle::Toggle,
+        options.model_dir,
+    );
     let mut terminal = match enter() {
         Ok(terminal) => terminal,
         Err(error) => {
