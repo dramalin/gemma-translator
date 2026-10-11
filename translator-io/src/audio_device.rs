@@ -6,7 +6,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample};
 use translator_core::pipeline::STT_SAMPLE_RATE;
 
-use crate::audio_convert::{downmix_to_mono, resample_linear};
+use crate::audio_convert::{downmix_to_mono, resample_linear, trim_silence};
 use crate::playback_queue::PlaybackQueue;
 use crate::sync::lock;
 
@@ -72,15 +72,17 @@ impl CapturedAudio {
         !self.interleaved.is_empty() || self.tail.is_some()
     }
 
-    /// Mono at `STT_SAMPLE_RATE`. With a tail pending this blocks until the
-    /// tail is recorded, so call it off the UI thread.
+    /// Mono at `STT_SAMPLE_RATE`, with leading and trailing silence cut short.
+    /// With a tail pending this blocks until the tail is recorded, so call it
+    /// off the UI thread.
     pub fn into_stt_samples(mut self) -> Vec<f32> {
         if let Some(tail) = self.tail.take() {
             thread::sleep(tail.ends_at.saturating_duration_since(Instant::now()));
             self.interleaved = tail.finish();
         }
         let mono = downmix_to_mono(&self.interleaved, self.channels);
-        resample_linear(&mono, self.sample_rate, STT_SAMPLE_RATE)
+        let samples = resample_linear(&mono, self.sample_rate, STT_SAMPLE_RATE);
+        trim_silence(samples, STT_SAMPLE_RATE)
     }
 }
 

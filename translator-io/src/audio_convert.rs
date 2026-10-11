@@ -91,6 +91,58 @@ impl LowPass {
     }
 }
 
+/// Frame length for the level measurements in `trim_silence`, in ms.
+const TRIM_FRAME_MS: u32 = 20;
+/// Silence kept before the first and after the last speech frame, in ms.
+/// On the eval corpus 200-300 ms scored best; at 500 ms Chinese clips again
+/// gained invented endings.
+const TRIM_KEEP_MS: u32 = 300;
+/// Loud frames must be this far (dB) above the noise floor to trim at all.
+const TRIM_MIN_RANGE_DB: f32 = 12.0;
+/// Speech starts this many loud frames in a row, so a key click does not count.
+const TRIM_MIN_RUN: usize = 3;
+
+/// Cuts leading and trailing silence down to `TRIM_KEEP_MS`.
+/// Moonshine returns nothing for some English clips that start with a second
+/// or more of silence, and continues Chinese clips that end with half a second
+/// of it with invented words. Speech is where frames are louder than halfway between the noise
+/// floor (10th percentile of frame levels) and the speech level (95th); when
+/// those are closer than `TRIM_MIN_RANGE_DB` the audio is returned as it is.
+pub fn trim_silence(mut samples: Vec<f32>, sample_rate: u32) -> Vec<f32> {
+    let frame = (sample_rate * TRIM_FRAME_MS / 1000) as usize;
+    let keep = (sample_rate * TRIM_KEEP_MS / 1000) as usize;
+    if frame == 0 || samples.len() <= 2 * keep {
+        return samples;
+    }
+    let levels: Vec<f32> = samples
+        .chunks(frame)
+        .map(|chunk| {
+            let power = chunk.iter().map(|s| s * s).sum::<f32>() / chunk.len() as f32;
+            10.0 * power.max(1e-12).log10()
+        })
+        .collect();
+    let mut sorted = levels.clone();
+    sorted.sort_by(f32::total_cmp);
+    let percentile = |p: usize| sorted[(sorted.len() - 1) * p / 100];
+    let (noise, speech) = (percentile(10), percentile(95));
+    if speech - noise < TRIM_MIN_RANGE_DB {
+        return samples;
+    }
+    let threshold = (noise + speech) / 2.0;
+    let loud = |run: &[f32]| run.iter().all(|&level| level > threshold);
+    let (Some(first), Some(last)) = (
+        levels.windows(TRIM_MIN_RUN).position(loud),
+        levels.windows(TRIM_MIN_RUN).rposition(loud),
+    ) else {
+        return samples;
+    };
+    let start = (first * frame).saturating_sub(keep);
+    let end = ((last + TRIM_MIN_RUN) * frame + keep).min(samples.len());
+    samples.truncate(end);
+    samples.drain(..start);
+    samples
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,5 +205,60 @@ mod tests {
     #[test]
     fn resample_of_empty_input_is_empty() {
         assert!(resample_linear(&[], 48_000, 16_000).is_empty());
+    }
+
+    /// Deterministic white noise of the given amplitude.
+    fn noise(amplitude: f32, count: usize) -> Vec<f32> {
+        let mut state = 1_u32;
+        (0..count)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                amplitude * ((state >> 8) as f32 / (1 << 23) as f32 - 1.0)
+            })
+            .collect()
+    }
+
+    /// `before` s of noise, `speech` s of a 300 Hz tone at `level`, `after` s of noise.
+    fn clip(before: f32, speech: f32, after: f32, level: f32) -> Vec<f32> {
+        let rate = 16_000.0;
+        let mut samples = noise(0.001, (before * rate) as usize);
+        let tone = sine(300.0, 16_000, (speech * rate) as usize);
+        samples.extend(tone.iter().map(|s| s * level));
+        samples.extend(noise(0.001, (after * rate) as usize));
+        let background = noise(0.001, samples.len());
+        samples
+            .iter_mut()
+            .zip(background)
+            .for_each(|(s, n)| *s += n);
+        samples
+    }
+
+    #[test]
+    fn trim_keeps_a_little_silence_around_speech() {
+        let trimmed = trim_silence(clip(1.5, 1.0, 1.0, 0.1), 16_000);
+        // 1 s of speech plus 0.3 s each side, to within a frame.
+        let expected = 16_000 + 2 * 4_800;
+        assert!(trimmed.len().abs_diff(expected) <= 640, "{}", trimmed.len());
+    }
+
+    #[test]
+    fn trim_ignores_a_click_in_the_silence() {
+        let mut samples = clip(1.5, 1.0, 1.0, 0.1);
+        samples[3_200..3_360].fill(0.5);
+        let trimmed = trim_silence(samples, 16_000);
+        assert!(
+            trimmed.len().abs_diff(16_000 + 2 * 4_800) <= 640,
+            "{}",
+            trimmed.len()
+        );
+    }
+
+    #[test]
+    fn trim_leaves_audio_alone_when_speech_is_not_clearly_louder() {
+        let quiet = clip(1.5, 1.0, 1.0, 0.002);
+        assert_eq!(trim_silence(quiet.clone(), 16_000), quiet);
+        let silent = vec![0.0; 48_000];
+        assert_eq!(trim_silence(silent.clone(), 16_000), silent);
+        assert_eq!(trim_silence(vec![0.5; 100], 16_000), [0.5; 100]);
     }
 }

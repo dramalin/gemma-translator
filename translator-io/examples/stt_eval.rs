@@ -1,12 +1,14 @@
 //! Speech recognition evaluation over the corpus in `eval/` (see eval/README.md).
 //!
 //! Every `<corpus>/<condition>/<lang>/NN.wav` goes through the app's own path
-//! (downmix, low-pass, resample, Moonshine, transcript cleanup) `--runs` times,
-//! and is scored against line NN of `<sentences>/<lang>.txt`: character error
-//! rate for Chinese and Japanese, word error rate otherwise. Clips whose runs
-//! disagree are counted as unstable. Per-clip results go to `<corpus>/report.tsv`.
+//! (downmix, low-pass, resample, silence trim, Moonshine, transcript cleanup)
+//! `--runs` times, and is scored against line NN of `<sentences>/<lang>.txt`:
+//! character error rate for Chinese and Japanese, word error rate otherwise,
+//! with numbers written out in words on both sides. Clips whose runs disagree
+//! are counted as unstable. Per-clip results go to `<corpus>/report.tsv`.
+//! `--no-trim` skips the silence trim, to compare against.
 //!
-//! make eval-stt [EVAL_ARGS="--runs 3 --only clean"]
+//! make eval-stt [EVAL_ARGS="--runs 3 --only clean --no-trim"]
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -18,6 +20,7 @@ use std::time::{Duration, Instant};
 use translator_core::language::LanguageCode;
 use translator_core::models::ModelPaths;
 use translator_core::pipeline::{SpeechToText, STT_SAMPLE_RATE};
+use translator_io::audio_convert::{downmix_to_mono, resample_linear};
 use translator_io::audio_device::CapturedAudio;
 use translator_io::chinese_script::spoken_text;
 use translator_io::native::speech::NativeSpeech;
@@ -29,6 +32,7 @@ struct Args {
     model_dir: PathBuf,
     runs: usize,
     only: Option<String>,
+    trim: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -40,6 +44,7 @@ fn parse_args() -> Result<Args, String> {
         model_dir: env("TRANSLATOR_MODEL_DIR").unwrap_or_else(|| PathBuf::from("models")),
         runs: 3,
         only: None,
+        trim: true,
     };
     let mut iter = std::env::args().skip(1);
     while let Some(flag) = iter.next() {
@@ -57,6 +62,7 @@ fn parse_args() -> Result<Args, String> {
                     .ok_or("--runs needs a positive number")?;
             }
             "--only" => args.only = Some(value()?),
+            "--no-trim" => args.trim = false,
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -129,8 +135,9 @@ fn file_name(path: &Path) -> String {
         .unwrap_or_default()
 }
 
-/// 16-bit PCM or 32-bit float WAV, any rate and channel count.
-fn read_wav(path: &Path) -> Result<CapturedAudio, String> {
+/// Interleaved samples, rate and channel count of a 16-bit PCM or 32-bit
+/// float WAV.
+fn read_wav(path: &Path) -> Result<(Vec<f32>, u32, u16), String> {
     let fail = |message: &str| format!("{}: {message}", path.display());
     let bytes = fs::read(path).map_err(|error| fail(&error.to_string()))?;
     if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
@@ -175,9 +182,7 @@ fn read_wav(path: &Path) -> Result<CapturedAudio, String> {
                         .collect(),
                     _ => return Err(fail(&format!("unsupported format {tag}/{bits}-bit"))),
                 };
-                let frames = samples.len() / usize::from(channels.max(1));
-                let duration = Duration::from_secs_f64(frames as f64 / f64::from(rate));
-                return Ok(CapturedAudio::new(samples, rate, channels, duration));
+                return Ok((samples, rate, channels));
             }
             _ => {}
         }
@@ -186,15 +191,41 @@ fn read_wav(path: &Path) -> Result<CapturedAudio, String> {
     Err(fail("no data chunk"))
 }
 
+/// Simplified characters zhconv and Moonshine disagree on, mapped to one form.
+const SAME_CHARACTERS: &[(char, char)] = &[('帐', '账')];
+
 /// The units errors are counted in: characters for Chinese and Japanese
 /// (in Simplified, punctuation and spaces dropped), lower-case words otherwise.
+/// Numbers in digits count as their words ("100" is 一百 or "one hundred").
 fn units(text: &str, language: LanguageCode) -> Vec<String> {
     match language {
-        LanguageCode::Zh | LanguageCode::Ja => spoken_text(text, language)
-            .chars()
-            .filter(|c| c.is_alphanumeric())
-            .map(String::from)
-            .collect(),
+        LanguageCode::Zh | LanguageCode::Ja => {
+            let text = spoken_text(text, language);
+            let mut characters = Vec::new();
+            let mut digits = String::new();
+            for c in text.chars().chain([' ']) {
+                if c.is_ascii_digit() {
+                    digits.push(c);
+                    continue;
+                }
+                // "1 0 0" is one number.
+                if c.is_whitespace() && !digits.is_empty() {
+                    continue;
+                }
+                if !digits.is_empty() {
+                    characters.extend(chinese_number(&digits).chars().map(String::from));
+                    digits.clear();
+                }
+                if c.is_alphanumeric() {
+                    let c = SAME_CHARACTERS
+                        .iter()
+                        .find(|(from, _)| *from == c)
+                        .map_or(c, |&(_, to)| to);
+                    characters.push(String::from(c));
+                }
+            }
+            characters
+        }
         _ => text
             .to_lowercase()
             .chars()
@@ -207,9 +238,91 @@ fn units(text: &str, language: LanguageCode) -> Vec<String> {
             })
             .collect::<String>()
             .split_whitespace()
-            .map(String::from)
+            .flat_map(|word| match word.parse::<u32>() {
+                Ok(number) if number < 1000 && !word.starts_with('0') || word == "0" => {
+                    english_number(number)
+                }
+                _ => vec![word.to_string()],
+            })
             .collect(),
     }
+}
+
+const CHINESE_DIGITS: [char; 10] = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+
+/// 一百, 十五, 两千零七 style for numbers below 10000; other digit strings
+/// (phone numbers, leading zeros) are read digit by digit.
+fn chinese_number(digits: &str) -> String {
+    let values: Vec<usize> = digits.bytes().map(|b| usize::from(b - b'0')).collect();
+    if values.len() > 4 || values.len() > 1 && values[0] == 0 {
+        return values.iter().map(|&d| CHINESE_DIGITS[d]).collect();
+    }
+    if values.iter().all(|&d| d == 0) {
+        return "零".to_string();
+    }
+    const PLACES: [&str; 4] = ["", "十", "百", "千"];
+    let mut out = String::new();
+    let mut pending_zero = false;
+    for (i, &digit) in values.iter().enumerate() {
+        let place = values.len() - 1 - i;
+        if digit == 0 {
+            pending_zero = !out.is_empty();
+            continue;
+        }
+        if pending_zero {
+            out.push('零');
+            pending_zero = false;
+        }
+        // 十五, not 一十五.
+        if !(digit == 1 && place == 1 && out.is_empty()) {
+            out.push(CHINESE_DIGITS[digit]);
+        }
+        out.push_str(PLACES[place]);
+    }
+    out
+}
+
+/// Words for 0..1000 ("one hundred twenty one").
+fn english_number(number: u32) -> Vec<String> {
+    const ONES: [&str; 20] = [
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
+    ];
+    const TENS: [&str; 10] = [
+        "", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+    ];
+    let mut words = Vec::new();
+    let (hundreds, rest) = (number / 100, number % 100);
+    if hundreds > 0 {
+        words.extend([ONES[hundreds as usize], "hundred"]);
+    }
+    if rest >= 20 {
+        words.push(TENS[(rest / 10) as usize]);
+        if rest % 10 > 0 {
+            words.push(ONES[(rest % 10) as usize]);
+        }
+    } else if rest > 0 || words.is_empty() {
+        words.push(ONES[rest as usize]);
+    }
+    words.into_iter().map(String::from).collect()
 }
 
 /// Levenshtein distance: substitutions, insertions and deletions.
@@ -287,9 +400,15 @@ fn run(args: &Args) -> Result<(), String> {
 
     let mut totals: BTreeMap<(String, &str), Totals> = BTreeMap::new();
     for clip in &clips {
-        let audio = read_wav(&clip.path)?;
-        let audio_length = audio.duration;
-        let samples = audio.into_stt_samples();
+        let (interleaved, rate, channels) = read_wav(&clip.path)?;
+        let frames = interleaved.len() / usize::from(channels.max(1));
+        let audio_length = Duration::from_secs_f64(frames as f64 / f64::from(rate.max(1)));
+        let samples = if args.trim {
+            CapturedAudio::new(interleaved, rate, channels, audio_length).into_stt_samples()
+        } else {
+            let mono = downmix_to_mono(&interleaved, channels);
+            resample_linear(&mono, rate, STT_SAMPLE_RATE)
+        };
         let mut hypotheses = Vec::with_capacity(args.runs);
         let mut stt_time = Duration::ZERO;
         for _ in 0..args.runs {
@@ -380,6 +499,38 @@ mod tests {
         assert_eq!(
             units("I'd like it.", LanguageCode::En),
             ["i'd", "like", "it"]
+        );
+    }
+
+    #[test]
+    fn numbers_are_scored_as_words() {
+        assert_eq!(
+            units("Exchange 100 dollars at 7 or 21.", LanguageCode::En),
+            units(
+                "exchange one hundred dollars at seven or twenty-one",
+                LanguageCode::En
+            )
+        );
+        assert_eq!(units("007", LanguageCode::En), ["007"]);
+        assert_eq!(
+            units("我想换 1 0 0 美金", LanguageCode::Zh),
+            units("我想換一百美金", LanguageCode::Zh)
+        );
+        for (digits, words) in [
+            ("7", "七"),
+            ("15", "十五"),
+            ("20", "二十"),
+            ("105", "一百零五"),
+            ("1007", "一千零七"),
+            ("1500", "一千五百"),
+            ("0", "零"),
+            ("0912", "零九一二"),
+        ] {
+            assert_eq!(chinese_number(digits), words, "{digits}");
+        }
+        assert_eq!(
+            units("结帐", LanguageCode::Zh),
+            units("結賬", LanguageCode::Zh)
         );
     }
 }

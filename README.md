@@ -186,7 +186,7 @@ flowchart TD
     mic(["Microphone"]) --> rec["AudioRecorder<br/>device rate, + 0.5 s tail"]
     state -- start / stop --> rec
     subgraph job ["JobRunner (background threads)"]
-        conv["Downmix, low-pass,<br/>resample to 16 kHz"] --> stt["Moonshine STT<br/>VAD off, repetition and<br/>CJK-space cleanup"]
+        conv["Downmix, low-pass,<br/>resample to 16 kHz,<br/>trim edge silence"] --> stt["Moonshine STT<br/>VAD off, repetition and<br/>CJK-space cleanup"]
         stt --> mt["Gemma via LiteRT-LM<br/>streaming translation"]
         mt --> split["Sentence splitter"]
         split --> tts["Moonshine TTS<br/>per sentence"]
