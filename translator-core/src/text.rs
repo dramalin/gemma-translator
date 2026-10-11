@@ -239,7 +239,8 @@ pub fn drop_trailing_repetition(text: &str) -> &str {
     let len = chars.len();
     let mut cut = len;
     let mut run = vec![0usize; len];
-    for period in MIN_REPEATED_PHRASE_CHARS..=len / 2 {
+    // (len + 1) / 2: the last copy may be one separator short.
+    for period in MIN_REPEATED_PHRASE_CHARS..=(len + 1) / 2 {
         // run[k]: how many characters up to k each equal the one a period earlier.
         for k in 0..len {
             run[k] = if k >= period && chars[k] == chars[k - period] {
@@ -249,10 +250,13 @@ pub fn drop_trailing_repetition(text: &str) -> &str {
             };
         }
         // The loop must reach to within one period of the end, and hold a
-        // whole second copy; that copy starts at `end - run`.
+        // whole second copy; that copy starts at `end - run`. A copy at the
+        // very end may lack only the space that separated the earlier ones.
         for end in (len + 1).saturating_sub(period).max(1)..=len {
             let length = run[end - 1];
-            if length >= period {
+            let unspaced_last_copy =
+                end == len && length + 1 == period && chars[len - period].is_whitespace();
+            if length >= period || unspaced_last_copy {
                 cut = cut.min(end - length);
             }
         }
@@ -311,6 +315,13 @@ mod tests {
         );
         let whole = "请问最近的车站在哪里？请问最近的车站在哪里？请问最近";
         assert_eq!(drop_trailing_repetition(whole), "请问最近的车站在哪里？");
+        // Two copies separated by a space; the last has none after it.
+        let spaced = "请问最近的火车站在哪里 ? 请问最近的火车站在哪里 ?";
+        assert_eq!(drop_trailing_repetition(spaced), "请问最近的火车站在哪里 ?");
+        assert_eq!(
+            drop_trailing_repetition("Where is the station? Where is the station?"),
+            "Where is the station?"
+        );
         // The last copy breaks off into a stray tail shorter than the phrase.
         let stray =
             "请问车站在哪里我想买两张到台北的车票请问车站在哪里我想买两张到台北的车票我想买两张";
