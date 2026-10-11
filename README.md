@@ -7,7 +7,7 @@ This repo was built with the assistance of [Google Antigravity](https://antigrav
 ## Features
 
 - **On-Device Inference**: Runs the `gemma4-e2b` model through LiteRT-LM, and Moonshine for speech, entirely locally. No internet required after setup.
-- **Voice Interface**: Captures microphone audio, transcribes it, translates it and speaks the result.
+- **Voice Interface**: Captures microphone audio, transcribes it, translates it and speaks the result. Silence and background noise around the speech are trimmed (by level, with the Silero voice activity detector as a check) and common recognizer slips such as repeated phrases are cleaned up before translation.
 - **Optimized UI**: Retro-terminal styling custom-built for small hardware screens (like Raspberry Pi displays), with a terminal UI for desktops and SSH sessions.
 - **One Program**: One binary, `translator` (or `translator-tui`), with the vendor libraries in `lib/` next to it and the models in one folder (`./models` on a desktop, `/var/lib/gemma-translator/models` on the Pi). No server process.
 
@@ -121,11 +121,17 @@ sudo systemctl disable gemma-translator && sudo systemctl set-default graphical.
 
 Settings are stored in `~/.config/gemma-translator/config.toml` (or under `$XDG_CONFIG_HOME`; on the Pi, in the home directory of the user that ran `sudo ./install.sh`; `--config <path>` uses another file). Press `Esc` to open the settings panel (↑/↓ select, ←/→ change). Recordings shorter than 300 ms are ignored.
 
+## Speech Recognition Tips
+
+- Speak within about 30 cm of the microphone. A MacBook Pro's built-in microphone gave error-free Chinese at 20-30 cm and one or two wrong characters at 50 cm; raising the input gain did not help, since it raises the noise too.
+- Steady noise (a fan at constant speed, room hum) costs little. Noise that comes and goes (traffic, a fan changing speed, a door, other voices) is what causes wrong or invented words.
+- The translator records from the system's default input unless `config.toml` names one (`audio_input_device = "<exact device name>"`, likewise `audio_output_device`). A Bluetooth headset as the input records at 16 kHz call quality; use the built-in or a USB microphone instead.
+
 ## Development
 
 ```bash
 make             # list every target
-make native-libs # fetch the pinned libmoonshine / liblitert-lm into native/<arch>/lib
+make native-libs # fetch the pinned libmoonshine (+ onnxruntime) / liblitert-lm into native/<arch>/lib
 make models      # download the models into MODEL_DIR (default ./models)
 make test        # all Rust tests
 make clippy      # lint, warnings are errors
@@ -139,8 +145,9 @@ make clean       # remove target/ and dist/ (keeps native/ and models/)
 The native libraries are loaded at run time from the pinned vendor wheels;
 their function signatures are copied from the wheels' ctypes code, so re-check
 `moonshine-sys` and `litert-lm-sys` whenever `scripts/fetch-native-libs.sh`
-moves to a new version. `make test-ffi` output contains the libraries' log
-lines; count results from the `test result:` lines only.
+moves to a new version, and the `OrtApi` slots in `onnxruntime-sys/src/ffi.rs`
+when the wheel's ONNX Runtime version changes. `make test-ffi` output contains
+the libraries' log lines; count results from the `test result:` lines only.
 
 ## Project Structure
 
@@ -151,6 +158,7 @@ lines; count results from the `test result:` lines only.
 - `translator-tui/` - the terminal program `translator-tui`.
 - `translator-models/` - downloads the models.
 - `moonshine-sys/`, `litert-lm-sys/`, `onnxruntime-sys/` - run-time bindings to the vendor libraries (ONNX Runtime ships with libmoonshine and runs the Silero voice activity detector).
+- `eval/` - speech recognition evaluation: sentence lists, recording and noise-mixing scripts (`make eval-stt`; recordings stay out of git).
 - `deploy/` - Pi cross-build image, `install.sh` and the systemd unit template.
 - `scripts/` - setup, native-library fetch and Pi packaging scripts.
 - `docs/` - design specs and implementation plans.
