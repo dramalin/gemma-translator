@@ -1,0 +1,12 @@
+[package]
+name = "onnxruntime-sys"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+libloading = "0.8"
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

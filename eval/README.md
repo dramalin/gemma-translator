@@ -43,7 +43,7 @@ As a guide, the MacBook Pro microphone measured about 15 dB at 30 cm and
 ```bash
 make eval-stt                                  # every condition, 3 runs per clip
 make eval-stt EVAL_ARGS="--only snr10 --runs 1"
-make eval-stt EVAL_ARGS="--no-trim"            # without the silence trim, to compare
+make eval-stt EVAL_ARGS="--trim energy"        # none | energy | vad | adaptive (default, as the app)
 ```
 
 | Column | Meaning |
@@ -51,14 +51,16 @@ make eval-stt EVAL_ARGS="--no-trim"            # without the silence trim, to co
 | CER/WER | Character error rate for zh/ja (Simplified, punctuation ignored), word error rate otherwise; digits count as their words (100 = 一百 = one hundred) |
 | exact | Clips with no error |
 | unstable | Clips whose runs gave different transcripts (should be 0) |
-| stt ms | Mean recognition time per clip, after a warm-up call |
+| stt ms | Mean time per clip for trimming (including the VAD) and recognition, after a warm-up call |
 | RTF | Recognition time / audio length |
 
 Per-clip transcripts go to `corpus/report.tsv`; keep a copy before a change
 and diff it afterwards. Results from the Mac and the Pi differ, so compare
 runs on the same machine.
 
-Background noise that comes and goes during a clean recording (a voice, a
-door) costs far more than steady noise at the same level: the silence trim
-cannot tell it from speech and Moonshine turns it into words. Re-record clips
-taken while something like that happened.
+Background noise that comes and goes (a fan, traffic, a door) costs far more
+than steady noise at the same level: trimming by level cannot tell it from
+speech and Moonshine turns it into words. The adaptive trim lets the Silero
+VAD overrule the level in that case. A clean recording spoiled by such noise
+is still worth keeping: move it to its own condition (e.g. `bursty`), or cut
+its noise-only lead-ins into `noise/<name>.wav` for `eval/mix-noise.sh`.

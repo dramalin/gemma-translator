@@ -79,6 +79,7 @@ fn run(options: &Options) -> Result<(), String> {
 
     let mut files = vec![catalog::gemma_file(&paths)];
     files.extend(catalog::stt_files(&paths));
+    files.push(catalog::vad_file(&paths));
     files.extend(catalog::tts_files(&paths, &tts_keys));
 
     // litert-lm writes its compiled-model cache here at run time; create it

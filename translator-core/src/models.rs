@@ -9,6 +9,9 @@ use crate::language::LanguageCode;
 /// File name of the Gemma 4 E2B model inside `<model_dir>/gemma/`.
 pub const GEMMA_FILE_NAME: &str = "gemma-4-E2B-it.litertlm";
 
+/// File name of the Silero voice activity detector inside `<model_dir>/vad/`.
+pub const VAD_FILE_NAME: &str = "silero_vad.onnx";
+
 /// Moonshine model architectures used by the six languages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SttModelArch {
@@ -64,7 +67,8 @@ const ENGLISH_STREAMING_COMPONENTS: &[&str] = &[
 /// which moved the segment start by up to 0.3 s and changed the transcript of
 /// the same audio from call to call. Without it, about 4 s of silence in the
 /// segment makes the model repeat itself, which
-/// `text::drop_trailing_repetition` cuts off.
+/// `text::drop_trailing_repetition` cuts off; `translator_io::speech_trim`
+/// cuts the silence around the speech beforehand with a fresh VAD.
 const TRANSCRIBER_OPTIONS: &[(&str, &str)] = &[("vad_threshold", "0")];
 const CJK_TRANSCRIBER_OPTIONS: &[(&str, &str)] =
     &[("vad_threshold", "0"), ("max_tokens_per_second", "13.0")];
@@ -176,6 +180,11 @@ impl ModelPaths {
     /// Moonshine's `g2p_root`: TTS asset keys are paths relative to it.
     pub fn tts_root(&self) -> PathBuf {
         self.root.join("tts")
+    }
+
+    /// Silero VAD, which finds where speech starts and ends in a recording.
+    pub fn vad_file(&self) -> PathBuf {
+        self.root.join("vad").join(VAD_FILE_NAME)
     }
 }
 

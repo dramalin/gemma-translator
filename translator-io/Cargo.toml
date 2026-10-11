@@ -9,6 +9,7 @@ translator-core = { path = "../translator-core" }
 cpal = "0.15"
 thiserror = "2"
 moonshine-sys = { path = "../moonshine-sys" }
+onnxruntime-sys = { path = "../onnxruntime-sys" }
 litert-lm-sys = { path = "../litert-lm-sys" }
 
 # Traditional/Simplified Chinese conversion around the speech engines. Only the

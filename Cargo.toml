@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "litert-lm-sys",
     "moonshine-sys",
+    "onnxruntime-sys",
     "translator-app",
     "translator-core",
     "translator-io",

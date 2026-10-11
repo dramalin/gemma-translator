@@ -150,7 +150,7 @@ lines; count results from the `test result:` lines only.
 - `translator-ui/` - the Slint program `translator`.
 - `translator-tui/` - the terminal program `translator-tui`.
 - `translator-models/` - downloads the models.
-- `moonshine-sys/`, `litert-lm-sys/` - run-time bindings to the vendor libraries.
+- `moonshine-sys/`, `litert-lm-sys/`, `onnxruntime-sys/` - run-time bindings to the vendor libraries (ONNX Runtime ships with libmoonshine and runs the Silero voice activity detector).
 - `deploy/` - Pi cross-build image, `install.sh` and the systemd unit template.
 - `scripts/` - setup, native-library fetch and Pi packaging scripts.
 - `docs/` - design specs and implementation plans.
@@ -169,11 +169,13 @@ flowchart TD
     io["translator-io<br/>cpal audio, volume, JobRunner, native workers"] --> core
     io --> msys["moonshine-sys"]
     io --> lsys["litert-lm-sys"]
+    io --> osys["onnxruntime-sys"]
     models["translator-models<br/>model downloader (make models)"] --> core
     models --> msys
     core["translator-core<br/>languages, keys, text, config, Controller"]
     msys -. libloading .-> libm[("libmoonshine<br/>+ onnxruntime")]
     lsys -. libloading .-> libl[("liblitert-lm")]
+    osys -. libloading .-> libm
 ```
 
 One recording, from key press to speech. The `Controller` returns `Effect`s that `AppState` carries out; the job runs on background threads and reports `JobEvent`s back to the UI thread.
@@ -186,7 +188,8 @@ flowchart TD
     mic(["Microphone"]) --> rec["AudioRecorder<br/>device rate, + 0.5 s tail"]
     state -- start / stop --> rec
     subgraph job ["JobRunner (background threads)"]
-        conv["Downmix, low-pass,<br/>resample to 16 kHz,<br/>trim edge silence"] --> stt["Moonshine STT<br/>VAD off, repetition and<br/>CJK-space cleanup"]
+        conv["Downmix, low-pass,<br/>resample to 16 kHz"] --> trim["Trim to the speech<br/>level + Silero VAD"]
+        trim --> stt["Moonshine STT<br/>VAD off, repetition, restart<br/>and CJK-space cleanup"]
         stt --> mt["Gemma via LiteRT-LM<br/>streaming translation"]
         mt --> split["Sentence splitter"]
         split --> tts["Moonshine TTS<br/>per sentence"]

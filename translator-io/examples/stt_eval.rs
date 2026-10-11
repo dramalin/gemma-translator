@@ -6,9 +6,10 @@
 //! character error rate for Chinese and Japanese, word error rate otherwise,
 //! with numbers written out in words on both sides. Clips whose runs disagree
 //! are counted as unstable. Per-clip results go to `<corpus>/report.tsv`.
-//! `--no-trim` skips the silence trim, to compare against.
+//! `--trim none|energy|vad|adaptive` picks how the silence is trimmed
+//! (default adaptive, as in the app), to compare against.
 //!
-//! make eval-stt [EVAL_ARGS="--runs 3 --only clean --no-trim"]
+//! make eval-stt [EVAL_ARGS="--runs 3 --only clean --trim energy"]
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -20,10 +21,10 @@ use std::time::{Duration, Instant};
 use translator_core::language::LanguageCode;
 use translator_core::models::ModelPaths;
 use translator_core::pipeline::{SpeechToText, STT_SAMPLE_RATE};
-use translator_io::audio_convert::{downmix_to_mono, resample_linear};
 use translator_io::audio_device::CapturedAudio;
 use translator_io::chinese_script::spoken_text;
 use translator_io::native::speech::NativeSpeech;
+use translator_io::speech_trim::TrimMode;
 
 struct Args {
     corpus: PathBuf,
@@ -32,7 +33,7 @@ struct Args {
     model_dir: PathBuf,
     runs: usize,
     only: Option<String>,
-    trim: bool,
+    trim: TrimMode,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -44,7 +45,7 @@ fn parse_args() -> Result<Args, String> {
         model_dir: env("TRANSLATOR_MODEL_DIR").unwrap_or_else(|| PathBuf::from("models")),
         runs: 3,
         only: None,
-        trim: true,
+        trim: TrimMode::Adaptive,
     };
     let mut iter = std::env::args().skip(1);
     while let Some(flag) = iter.next() {
@@ -62,7 +63,10 @@ fn parse_args() -> Result<Args, String> {
                     .ok_or("--runs needs a positive number")?;
             }
             "--only" => args.only = Some(value()?),
-            "--no-trim" => args.trim = false,
+            "--trim" => {
+                args.trim = TrimMode::parse(&value()?)
+                    .ok_or("--trim takes none, energy, vad or adaptive")?;
+            }
             other => return Err(format!("unknown argument {other}")),
         }
     }
@@ -378,10 +382,11 @@ fn run(args: &Args) -> Result<(), String> {
     let mut languages: Vec<LanguageCode> = clips.iter().map(|clip| clip.language).collect();
     languages.sort_by_key(|language| language.code());
     languages.dedup();
-    let speech = NativeSpeech::spawn(
+    let speech = NativeSpeech::spawn_with_trim(
         args.lib_dir.clone(),
         ModelPaths::new(args.model_dir.clone()),
         languages.clone(),
+        args.trim,
     );
     // The first call to each model is slow; keep it out of the timings.
     for &language in &languages {
@@ -403,12 +408,8 @@ fn run(args: &Args) -> Result<(), String> {
         let (interleaved, rate, channels) = read_wav(&clip.path)?;
         let frames = interleaved.len() / usize::from(channels.max(1));
         let audio_length = Duration::from_secs_f64(frames as f64 / f64::from(rate.max(1)));
-        let samples = if args.trim {
-            CapturedAudio::new(interleaved, rate, channels, audio_length).into_stt_samples()
-        } else {
-            let mono = downmix_to_mono(&interleaved, channels);
-            resample_linear(&mono, rate, STT_SAMPLE_RATE)
-        };
+        let samples =
+            CapturedAudio::new(interleaved, rate, channels, audio_length).into_stt_samples();
         let mut hypotheses = Vec::with_capacity(args.runs);
         let mut stt_time = Duration::ZERO;
         for _ in 0..args.runs {

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::thread;
 
 use moonshine_sys::{ModelArch, MoonshineLibrary, Synthesizer, Transcriber};
+use onnxruntime_sys::OrtLibrary;
 use translator_core::language::LanguageCode;
 use translator_core::models::{ModelPaths, SttModelArch};
 use translator_core::pipeline::{
@@ -13,6 +14,8 @@ use translator_core::text::clean_transcript;
 
 use super::engine_error;
 use super::lru::LruCache;
+use super::vad::SileroVad;
+use crate::speech_trim::{trim_speech, TrimMode};
 
 const SERVICE: &str = "speech engine";
 /// Models kept loaded per kind (recognizer, voice); each is large.
@@ -52,12 +55,23 @@ impl SpeechRequest {
 
 impl NativeSpeech {
     /// Starts the speech thread. It loads `libmoonshine` from `lib_dir`,
-    /// then both kinds of model for each `preload` language, then serves requests.
+    /// then both kinds of model for each `preload` language, then serves
+    /// requests. Recordings are trimmed with `TrimMode::Adaptive`.
     pub fn spawn(lib_dir: PathBuf, paths: ModelPaths, preload: Vec<LanguageCode>) -> NativeSpeech {
+        NativeSpeech::spawn_with_trim(lib_dir, paths, preload, TrimMode::Adaptive)
+    }
+
+    /// `spawn` with another way of trimming recordings, for evaluation.
+    pub fn spawn_with_trim(
+        lib_dir: PathBuf,
+        paths: ModelPaths,
+        preload: Vec<LanguageCode>,
+        trim: TrimMode,
+    ) -> NativeSpeech {
         let (requests, receiver) = mpsc::channel();
         thread::Builder::new()
             .name("speech".to_string())
-            .spawn(move || run_speech_thread(&lib_dir, paths, &preload, receiver))
+            .spawn(move || run_speech_thread(&lib_dir, paths, &preload, trim, receiver))
             .expect("spawning the speech thread");
         NativeSpeech { requests }
     }
@@ -99,6 +113,7 @@ fn run_speech_thread(
     lib_dir: &Path,
     paths: ModelPaths,
     preload: &[LanguageCode],
+    trim: TrimMode,
     requests: Receiver<SpeechRequest>,
 ) {
     let library = match MoonshineLibrary::load(lib_dir) {
@@ -112,11 +127,17 @@ fn run_speech_thread(
             return;
         }
     };
+    let vad = trim
+        .uses_vad()
+        .then(|| load_vad(lib_dir, &paths.vad_file()))
+        .flatten();
     let mut engines = SpeechEngines {
         library,
         paths,
         transcribers: LruCache::new(MODELS_PER_KIND),
         synthesizers: LruCache::new(MODELS_PER_KIND),
+        trim,
+        vad,
     };
     for &language in preload {
         if let Err(error) = engines.transcriber(language) {
@@ -136,6 +157,7 @@ fn run_speech_thread(
                 language,
                 reply,
             } => {
+                let samples = engines.trim(samples);
                 let result = engines.transcriber(language).and_then(|transcriber| {
                     transcriber
                         .transcribe(&samples, STT_SAMPLE_RATE)
@@ -164,14 +186,54 @@ fn run_speech_thread(
     }
 }
 
+/// The voice activity detector, or `None` (logged) when the library or the
+/// model is missing: trimming then goes by level alone.
+fn load_vad(lib_dir: &Path, model: &Path) -> Option<SileroVad> {
+    if !model.is_file() {
+        eprintln!(
+            "[speech] {} missing: trimming recordings by level only; run translator-models",
+            model.display()
+        );
+        return None;
+    }
+    OrtLibrary::load(lib_dir)
+        .and_then(|library| SileroVad::load(&library, model))
+        .map_err(|error| {
+            eprintln!("[speech] voice activity detector: {error}; trimming by level only")
+        })
+        .ok()
+}
+
 struct SpeechEngines {
     library: Arc<MoonshineLibrary>,
     paths: ModelPaths,
     transcribers: LruCache<LanguageCode, Transcriber>,
     synthesizers: LruCache<LanguageCode, Synthesizer>,
+    trim: TrimMode,
+    vad: Option<SileroVad>,
 }
 
 impl SpeechEngines {
+    /// Cuts the silence around the speech in a 16 kHz recording.
+    fn trim(&mut self, samples: Vec<f32>) -> Vec<f32> {
+        let probabilities = match &mut self.vad {
+            Some(vad) if self.trim.uses_vad() => match vad.probabilities(&samples) {
+                Ok(probabilities) => Some(probabilities),
+                Err(error) => {
+                    eprintln!("[speech] voice activity detector: {error}");
+                    None
+                }
+            },
+            _ => None,
+        };
+        trim_speech(
+            samples,
+            STT_SAMPLE_RATE,
+            self.trim,
+            probabilities.as_deref(),
+        )
+    }
+
     fn transcriber(&mut self, language: LanguageCode) -> Result<&mut Transcriber, PipelineError> {
         let model = language.stt_model();
         let directory = self.paths.stt_dir(model);

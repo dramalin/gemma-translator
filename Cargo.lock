@@ -3393,6 +3393,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "onnxruntime-sys"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "orbclient"
 version = "0.3.55"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5070,6 +5079,7 @@ dependencies = [
  "cpal",
  "litert-lm-sys",
  "moonshine-sys",
+ "onnxruntime-sys",
  "tempfile",
  "thiserror 2.0.21",
  "translator-core",
