@@ -191,9 +191,9 @@ fn push_trimmed(sentences: &mut Vec<String>, text: &str) {
 /// rather than characters and spaces.
 pub fn clean_transcript(text: &str, language: LanguageCode) -> String {
     if language.is_unspaced_cjk() {
-        drop_trailing_repetition(&remove_cjk_spaces(text)).to_string()
+        drop_restarted_tail(drop_trailing_repetition(&remove_cjk_spaces(text))).to_string()
     } else {
-        drop_trailing_repetition(text).to_string()
+        drop_restarted_tail(drop_trailing_repetition(text)).to_string()
     }
 }
 
@@ -225,6 +225,34 @@ fn is_cjk(c: char) -> bool {
         | '\u{FF00}'..='\u{FFEF}')
 }
 
+/// Shortest repeat `drop_restarted_tail` cuts, in letters and digits with a
+/// Chinese or Japanese character counting as two.
+const MIN_RESTART_WEIGHT: usize = 8;
+
+/// Cuts a transcript that starts over once it is done: when the end repeats
+/// the beginning, the repeat goes ("我想买两张车票我想买两张" keeps
+/// "我想买两张车票"). Moonshine does this, whole or in part, when the speech
+/// ends in noise. Only letters and digits are compared, ignoring case.
+pub fn drop_restarted_tail(text: &str) -> &str {
+    let units: Vec<(usize, char)> = text
+        .char_indices()
+        .filter(|(_, c)| c.is_alphanumeric())
+        .flat_map(|(i, c)| c.to_lowercase().map(move |lower| (i, lower)))
+        .collect();
+    let weight = |c: char| if is_cjk(c) { 2 } else { 1 };
+    // Longest tail first; a tail is compared with the start of the text.
+    for start in 1..units.len() {
+        let tail = &units[start..];
+        if tail.iter().map(|&(_, c)| weight(c)).sum::<usize>() < MIN_RESTART_WEIGHT {
+            break;
+        }
+        if tail.iter().zip(&units).all(|(a, b)| a.1 == b.1) {
+            return text[..tail[0].0].trim_end();
+        }
+    }
+    text
+}
+
 /// Shortest phrase, in characters, that counts as a repetition loop; shorter
 /// repeats ("no, no") are left alone.
 const MIN_REPEATED_PHRASE_CHARS: usize = 8;
@@ -239,8 +267,8 @@ pub fn drop_trailing_repetition(text: &str) -> &str {
     let len = chars.len();
     let mut cut = len;
     let mut run = vec![0usize; len];
-    // (len + 1) / 2: the last copy may be one separator short.
-    for period in MIN_REPEATED_PHRASE_CHARS..=(len + 1) / 2 {
+    // Half rounded up: the last copy may be one separator short.
+    for period in MIN_REPEATED_PHRASE_CHARS..=len.div_ceil(2) {
         // run[k]: how many characters up to k each equal the one a period earlier.
         for k in 0..len {
             run[k] = if k >= period && chars[k] == chars[k - period] {
@@ -290,8 +318,11 @@ mod tests {
     fn spaced_cjk_loops_are_judged_by_characters() {
         // Four characters repeat: too short to count as a loop, spaced or not.
         assert_eq!(
-            clean_transcript("我 不 知 道 我 不 知 道 我 不 知 道", LanguageCode::Zh),
-            "我不知道我不知道我不知道"
+            clean_transcript(
+                "他 说 我 不 知 道 我 不 知 道 我 不 知 道",
+                LanguageCode::Zh
+            ),
+            "他说我不知道我不知道我不知道"
         );
         let looped = "请 问 车 站 在 哪 里 我 想 买 两 张 到 台 北 的 车 票 \
                       我 想 买 两 张 到 台 北 的 车 票 我 想 买";
@@ -329,6 +360,47 @@ mod tests {
             drop_trailing_repetition(stray),
             "请问车站在哪里我想买两张到台北的车票"
         );
+    }
+
+    #[test]
+    fn a_restart_at_the_end_is_cut() {
+        for (text, kept) in [
+            (
+                "我想买两张到台北的车票我想买两张到台",
+                "我想买两张到台北的车票",
+            ),
+            ("这班车几点出发这班车几点出发", "这班车几点出发"),
+            (
+                "请问这附近有好吃的餐厅吗? 请问这附近有好吃的??",
+                "请问这附近有好吃的餐厅吗?",
+            ),
+            ("哦哦哦哦哦哦哦哦", "哦"),
+            (
+                "I'd like a hot latte. I'd like a hot",
+                "I'd like a hot latte.",
+            ),
+        ] {
+            assert_eq!(drop_restarted_tail(text), kept, "{text}");
+        }
+        assert_eq!(
+            clean_transcript("请 问 车 站 在 哪 里 请 问 车 站", LanguageCode::Zh),
+            "请问车站在哪里"
+        );
+    }
+
+    #[test]
+    fn a_short_or_inner_repeat_is_not_a_restart() {
+        for text in [
+            "谢谢你，真的谢谢你",
+            "走走走",
+            "No, no, no.",
+            "Is it far? Is it",
+            "我要一杯咖啡和一杯咖啡",
+            "请问最近的火车站在哪里？我想买两张到台北的车票。",
+            "",
+        ] {
+            assert_eq!(drop_restarted_tail(text), text);
+        }
     }
 
     #[test]
