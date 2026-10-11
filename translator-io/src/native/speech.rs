@@ -1,8 +1,9 @@
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use moonshine_sys::{DependencyFile, ModelArch, MoonshineLibrary, Synthesizer, Transcriber};
 use onnxruntime_sys::OrtLibrary;
@@ -21,10 +22,17 @@ use crate::speech_trim::{pad_tail, trim_speech, TrimMode};
 const SERVICE: &str = "speech engine";
 /// Models kept loaded per kind (recognizer, voice); each is large.
 const MODELS_PER_KIND: usize = 2;
+/// How long dropping a `NativeSpeech` waits for its thread to free the
+/// models: long enough for a request in progress to finish.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 
 /// Speech recognition and synthesis on one thread that owns every Moonshine handle.
 pub struct NativeSpeech {
-    requests: Sender<SpeechRequest>,
+    /// `None` once dropping has begun.
+    requests: Option<Sender<SpeechRequest>>,
+    /// Disconnects when the thread has freed every handle. (A `Mutex` only
+    /// to make `NativeSpeech` `Sync`; only `drop` uses it.)
+    finished: Mutex<Receiver<()>>,
 }
 
 enum SpeechRequest {
@@ -79,11 +87,40 @@ impl NativeSpeech {
         tts: TtsSettings,
     ) -> NativeSpeech {
         let (requests, receiver) = mpsc::channel();
+        let (finished_sender, finished) = mpsc::channel::<()>();
         thread::Builder::new()
             .name("speech".to_string())
-            .spawn(move || run_speech_thread(&lib_dir, paths, &preload, trim, tts, receiver))
+            .spawn(move || {
+                run_speech_thread(&lib_dir, paths, &preload, trim, tts, receiver);
+                drop(finished_sender);
+            })
             .expect("spawning the speech thread");
-        NativeSpeech { requests }
+        NativeSpeech {
+            requests: Some(requests),
+            finished: Mutex::new(finished),
+        }
+    }
+
+    fn send(&self, request: SpeechRequest) -> Result<(), PipelineError> {
+        self.requests
+            .as_ref()
+            .ok_or_else(stopped)?
+            .send(request)
+            .map_err(|_| stopped())
+    }
+}
+
+/// Closes the request channel and waits (up to `SHUTDOWN_WAIT`) until the
+/// thread has freed the models. Process exit must not run while it does:
+/// libmoonshine and ONNX Runtime tearing down on this thread as the C++
+/// runtime shuts down threw a C++ exception into Rust, which aborts (6 of 30
+/// exits under full CPU load).
+impl Drop for NativeSpeech {
+    fn drop(&mut self) {
+        self.requests = None;
+        if let Ok(finished) = self.finished.get_mut() {
+            let _ = finished.recv_timeout(SHUTDOWN_WAIT);
+        }
     }
 }
 
@@ -94,13 +131,11 @@ fn stopped() -> PipelineError {
 impl SpeechToText for NativeSpeech {
     fn transcribe(&self, samples: &[f32], language: LanguageCode) -> Result<String, PipelineError> {
         let (reply, response) = mpsc::channel();
-        self.requests
-            .send(SpeechRequest::Transcribe {
-                samples: samples.to_vec(),
-                language,
-                reply,
-            })
-            .map_err(|_| stopped())?;
+        self.send(SpeechRequest::Transcribe {
+            samples: samples.to_vec(),
+            language,
+            reply,
+        })?;
         response.recv().map_err(|_| stopped())?
     }
 }
@@ -108,13 +143,11 @@ impl SpeechToText for NativeSpeech {
 impl TextToSpeech for NativeSpeech {
     fn synthesize(&self, text: &str, language: LanguageCode) -> Result<AudioClip, PipelineError> {
         let (reply, response) = mpsc::channel();
-        self.requests
-            .send(SpeechRequest::Synthesize {
-                text: text.to_string(),
-                language,
-                reply,
-            })
-            .map_err(|_| stopped())?;
+        self.send(SpeechRequest::Synthesize {
+            text: text.to_string(),
+            language,
+            reply,
+        })?;
         response.recv().map_err(|_| stopped())?
     }
 }
