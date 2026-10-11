@@ -31,7 +31,7 @@ This repo was built with the assistance of [Google Antigravity](https://antigrav
 ## Desktop (Linux or macOS)
 
 ```bash
-make setup           # checks the tools, fetches the native libraries and the ~3.8 GB of models
+make setup           # checks the tools, fetches the native libraries and the ~3.7 GB of models
 make run             # Slint window, in-process inference
 make run-tui         # terminal UI, in-process inference
 make run-mock        # Slint window with mock speech and translation (no models needed)

@@ -1,6 +1,8 @@
 //! Fetches one file: written to `<name>.part`, checked against Content-Length
-//! and (when known) sha256, then renamed into place. A file already at its
-//! final path was verified when it was written, so it is never fetched again.
+//! and (when known) the expected size, sha256 or crc32c, then renamed into
+//! place. A file already at its final path was verified when it was written;
+//! it is fetched again only when it no longer matches the expected size or
+//! crc32c, as when Moonshine publishes a new build under the same name.
 
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Read, Write};
@@ -14,12 +16,21 @@ pub struct FileSpec {
     pub url: String,
     pub destination: PathBuf,
     pub expected_sha256: Option<&'static str>,
+    pub expected_size: Option<u64>,
+    /// Base64 of the big-endian crc32c, as Moonshine's manifests give it.
+    pub expected_crc32c: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownloadOutcome {
     AlreadyPresent,
-    Downloaded { bytes: u64 },
+    Downloaded {
+        bytes: u64,
+    },
+    /// The file on disk did not match the expected size or checksum.
+    Replaced {
+        bytes: u64,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -40,6 +51,12 @@ pub enum DownloadError {
         expected: &'static str,
         actual: String,
     },
+    #[error("{url}: crc32c {actual} does not match {expected}")]
+    Crc32cMismatch {
+        url: String,
+        expected: String,
+        actual: String,
+    },
     #[error("{path}: {source}")]
     Io { path: PathBuf, source: io::Error },
 }
@@ -58,7 +75,8 @@ pub fn ensure_file(
     spec: &FileSpec,
     on_progress: &mut dyn FnMut(u64, Option<u64>),
 ) -> Result<DownloadOutcome, DownloadError> {
-    if spec.destination.is_file() {
+    let replacing = spec.destination.is_file();
+    if replacing && matches_expected(spec)? {
         return Ok(DownloadOutcome::AlreadyPresent);
     }
     let parent = spec
@@ -70,13 +88,55 @@ pub fn ensure_file(
     match download_to(agent, spec, &partial, on_progress) {
         Ok(bytes) => {
             fs::rename(&partial, &spec.destination).map_err(io_error(&spec.destination))?;
-            Ok(DownloadOutcome::Downloaded { bytes })
+            Ok(if replacing {
+                DownloadOutcome::Replaced { bytes }
+            } else {
+                DownloadOutcome::Downloaded { bytes }
+            })
         }
         Err(error) => {
             let _ = fs::remove_file(&partial);
             Err(error)
         }
     }
+}
+
+/// Whether the file at the destination has the expected size and crc32c
+/// (each when known).
+fn matches_expected(spec: &FileSpec) -> Result<bool, DownloadError> {
+    let path = &spec.destination;
+    if let Some(size) = spec.expected_size {
+        if fs::metadata(path).map_err(io_error(path))?.len() != size {
+            return Ok(false);
+        }
+    }
+    let Some(expected) = &spec.expected_crc32c else {
+        return Ok(true);
+    };
+    let mut file = File::open(path).map_err(io_error(path))?;
+    let mut crc = 0;
+    let mut buffer = vec![0u8; 1 << 16];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => crc = crc32c::crc32c_append(crc, &buffer[..read]),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(io_error(path)(error)),
+        }
+    }
+    Ok(crc32c_base64(crc) == *expected)
+}
+
+/// Base64 of the big-endian bytes, the form Moonshine's manifests (like
+/// Google Cloud Storage) use.
+fn crc32c_base64(crc: u32) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bits = u64::from(crc) << 16; // 32 bits, then two zero bytes of padding
+    let mut text: String = (0..6)
+        .map(|index| ALPHABET[((bits >> (42 - 6 * index)) & 0x3f) as usize] as char)
+        .collect();
+    text.push_str("==");
+    text
 }
 
 fn download_to(
@@ -105,6 +165,7 @@ fn download_to(
         BufWriter::with_capacity(1 << 18, File::create(partial).map_err(io_error(partial))?);
     let mut reader = response.into_reader();
     let mut hasher = Sha256::new();
+    let mut crc = 0;
     let mut buffer = vec![0u8; 1 << 16];
     let mut received = 0u64;
     loop {
@@ -120,6 +181,7 @@ fn download_to(
             }
         };
         hasher.update(&buffer[..read]);
+        crc = crc32c::crc32c_append(crc, &buffer[..read]);
         file.write_all(&buffer[..read]).map_err(io_error(partial))?;
         received += read as u64;
         on_progress(received, expected_length);
@@ -127,7 +189,7 @@ fn download_to(
     file.flush().map_err(io_error(partial))?;
     file.get_ref().sync_all().map_err(io_error(partial))?;
 
-    if let Some(expected) = expected_length {
+    for expected in [expected_length, spec.expected_size].into_iter().flatten() {
         if received != expected {
             return Err(DownloadError::Truncated {
                 url: url.clone(),
@@ -142,6 +204,16 @@ fn download_to(
             return Err(DownloadError::HashMismatch {
                 url: url.clone(),
                 expected,
+                actual,
+            });
+        }
+    }
+    if let Some(expected) = &spec.expected_crc32c {
+        let actual = crc32c_base64(crc);
+        if actual != *expected {
+            return Err(DownloadError::Crc32cMismatch {
+                url: url.clone(),
+                expected: expected.clone(),
                 actual,
             });
         }
@@ -200,6 +272,8 @@ mod tests {
             url,
             destination,
             expected_sha256,
+            expected_size: None,
+            expected_crc32c: None,
         }
     }
 
@@ -231,6 +305,52 @@ mod tests {
         let outcome = fetch(&spec(url, destination.clone(), None)).unwrap();
         assert_eq!(outcome, DownloadOutcome::AlreadyPresent);
         assert_eq!(std::fs::read(&destination).unwrap(), b"old");
+    }
+
+    // crc32c("hello") = 0x9a71bb4c
+    const HELLO_CRC32C: &str = "mnG7TA==";
+
+    #[test]
+    fn crc32c_is_encoded_like_the_manifests() {
+        assert_eq!(crc32c_base64(crc32c::crc32c(b"hello")), HELLO_CRC32C);
+        assert_eq!(crc32c_base64(0), "AAAAAA==");
+    }
+
+    #[test]
+    fn a_file_that_no_longer_matches_is_replaced() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("file.bin");
+        std::fs::write(&destination, b"jello").unwrap();
+        let url = serve_once(ok_response(5, b"hello"));
+        let spec = FileSpec {
+            expected_size: Some(5),
+            expected_crc32c: Some(HELLO_CRC32C.to_string()),
+            ..spec(url, destination.clone(), None)
+        };
+        assert_eq!(
+            fetch(&spec).unwrap(),
+            DownloadOutcome::Replaced { bytes: 5 }
+        );
+        assert_eq!(std::fs::read(&destination).unwrap(), b"hello");
+        // Now it matches: no request (the server is gone).
+        assert_eq!(fetch(&spec).unwrap(), DownloadOutcome::AlreadyPresent);
+    }
+
+    #[test]
+    fn crc32c_mismatch_leaves_no_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("file.bin");
+        let url = serve_once(ok_response(5, b"jello"));
+        let spec = FileSpec {
+            expected_crc32c: Some(HELLO_CRC32C.to_string()),
+            ..spec(url, destination.clone(), None)
+        };
+        let error = fetch(&spec).unwrap_err();
+        assert!(
+            matches!(error, DownloadError::Crc32cMismatch { .. }),
+            "{error}"
+        );
+        assert!(!destination.exists());
     }
 
     #[test]

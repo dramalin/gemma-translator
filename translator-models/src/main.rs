@@ -4,14 +4,14 @@
 mod catalog;
 mod download;
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use moonshine_sys::MoonshineLibrary;
+use moonshine_sys::{DependencyFile, ModelArch, MoonshineLibrary};
 use translator_core::config::Config;
 use translator_core::language::LanguageCode;
-use translator_core::models::{ModelPaths, TtsSettings, TtsVoice};
+use translator_core::models::{ModelPaths, SttModelArch, TtsSettings, TtsVoice};
 
 use crate::download::{ensure_file, DownloadOutcome};
 
@@ -100,12 +100,21 @@ fn run(options: &Options) -> Result<(), String> {
     }
     let tts = load_tts_settings(options.config.as_deref())?;
     check_voices(&library, root, &tts)?;
-    let tts_keys = collect_tts_keys(&library, root, &tts)?;
+    let tts_files = collect_tts_files(&library, root, &tts)?;
 
     let mut files = vec![catalog::gemma_file(&paths)];
-    files.extend(catalog::stt_files(&paths));
+    for language in LanguageCode::ALL {
+        let model = language.stt_model();
+        let manifest = library
+            .stt_dependencies(language.code(), model_arch(model.arch))
+            .map_err(|error| error.to_string())?;
+        files.extend(catalog::manifest_files(&paths.stt_dir(model), &manifest));
+    }
     files.push(catalog::vad_file(&paths));
-    files.extend(catalog::tts_files(&paths, &tts_keys));
+    files.extend(catalog::manifest_files(
+        &paths.tts_root(),
+        tts_files.values(),
+    ));
 
     // litert-lm writes its compiled-model cache here at run time; create it
     // now, while the deploying user can still write to the model directory.
@@ -132,6 +141,9 @@ fn run(options: &Options) -> Result<(), String> {
             Ok(DownloadOutcome::Downloaded { bytes }) => {
                 println!("fetched  {} ({bytes} bytes)", spec.destination.display())
             }
+            Ok(DownloadOutcome::Replaced { bytes }) => {
+                println!("updated  {} ({bytes} bytes)", spec.destination.display())
+            }
             Err(error) => {
                 eprintln!("failed   {error}");
                 failures += 1;
@@ -144,12 +156,103 @@ fn run(options: &Options) -> Result<(), String> {
             files.len()
         ));
     }
+    for removed in remove_onnx_files(&paths.tts_root())? {
+        println!("removed  {} (moonshine loads .ort only)", removed.display());
+    }
+    let wanted: Vec<&Path> = files
+        .iter()
+        .map(|spec| spec.destination.as_path())
+        .collect();
+    for removed in remove_other_stt_models(&paths, &wanted)? {
+        println!(
+            "removed  {} (not part of a current model)",
+            removed.display()
+        );
+    }
     println!(
         "all {} model files ready in {}",
         files.len(),
         paths.root().display()
     );
     Ok(())
+}
+
+/// Deletes what under `stt/` is not a current model's file: the models of an
+/// earlier version, and files a model no longer lists (Moonshine might load
+/// an old `frontend.ort` in place of the new pair). They would also ship in
+/// the Pi package.
+fn remove_other_stt_models(paths: &ModelPaths, wanted: &[&Path]) -> Result<Vec<PathBuf>, String> {
+    let root = paths.stt_root();
+    let current: Vec<PathBuf> = LanguageCode::ALL
+        .iter()
+        .map(|language| paths.stt_dir(language.stt_model()))
+        .collect();
+    let entries = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("{}: {error}", root.display())),
+    };
+    let mut removed = Vec::new();
+    for entry in entries {
+        let path = entry
+            .map_err(|error| format!("{}: {error}", root.display()))?
+            .path();
+        if !path.is_dir() {
+            continue;
+        }
+        if !current.contains(&path) {
+            std::fs::remove_dir_all(&path)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+            removed.push(path);
+            continue;
+        }
+        for file in
+            std::fs::read_dir(&path).map_err(|error| format!("{}: {error}", path.display()))?
+        {
+            let file = file
+                .map_err(|error| format!("{}: {error}", path.display()))?
+                .path();
+            if file.is_file() && !wanted.contains(&file.as_path()) {
+                std::fs::remove_file(&file)
+                    .map_err(|error| format!("{}: {error}", file.display()))?;
+                removed.push(file);
+            }
+        }
+    }
+    removed.sort();
+    Ok(removed)
+}
+
+/// Deletes the `.onnx` models under `directory`: earlier Moonshine versions
+/// used them, the current one loads `.ort` files only, and they would ship
+/// in the Pi package. Piper's `.onnx.json` configs stay.
+fn remove_onnx_files(directory: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut removed = Vec::new();
+    let mut pending = vec![directory.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(format!("{}: {error}", directory.display())),
+        };
+        for entry in entries {
+            let path = entry
+                .map_err(|error| format!("{}: {error}", directory.display()))?
+                .path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "onnx")
+            {
+                std::fs::remove_file(&path)
+                    .map_err(|error| format!("{}: {error}", path.display()))?;
+                removed.push(path);
+            }
+        }
+    }
+    removed.sort();
+    Ok(removed)
 }
 
 /// Completed tenths (1..=10) of a large download, or `None` for small or
@@ -218,15 +321,16 @@ fn list_voices(library: &MoonshineLibrary, root: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Asset keys for each language's built-in voice and its configured one.
+/// The files, by name relative to the TTS root, of each language's built-in
+/// voice and its configured one.
 /// The built-in voices are always fetched, so a package built with one
 /// config still speaks under another config's defaults.
-fn collect_tts_keys(
+fn collect_tts_files(
     library: &MoonshineLibrary,
     root: &str,
     tts: &TtsSettings,
-) -> Result<BTreeSet<String>, String> {
-    let mut keys = BTreeSet::new();
+) -> Result<BTreeMap<String, DependencyFile>, String> {
+    let mut files = BTreeMap::new();
     for language in LanguageCode::ALL {
         let configured = tts.voice(language);
         let built_in = language.tts_voice();
@@ -235,34 +339,40 @@ fn collect_tts_keys(
             voices.push(configured);
         }
         for voice in voices {
-            keys.extend(voice_keys(library, root, &voice)?);
+            for file in voice_files(library, root, &voice)? {
+                files.insert(file.name.clone(), file);
+            }
         }
     }
-    Ok(keys)
+    Ok(files)
 }
 
-fn voice_keys(
+fn voice_files(
     library: &MoonshineLibrary,
     root: &str,
     voice: &TtsVoice,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<DependencyFile>, String> {
     let options = voice.synthesizer_options(root);
     let options: Vec<(&str, &str)> = options
         .iter()
         .map(|(name, value)| (*name, value.as_str()))
         .collect();
-    let dependencies = library
+    let files = library
         .tts_dependencies(voice.language_tag, &options)
         .map_err(|error| error.to_string())?;
-    // Keys without a '/' are G2P override labels, not files.
-    let files: Vec<String> = dependencies
-        .into_iter()
-        .filter(|key| key.contains('/'))
-        .collect();
     if files.is_empty() {
         return Err(format!("no TTS assets listed for {}", voice.language_tag));
     }
     Ok(files)
+}
+
+fn model_arch(arch: SttModelArch) -> ModelArch {
+    match arch {
+        SttModelArch::Tiny => ModelArch::Tiny,
+        SttModelArch::TinyStreaming => ModelArch::TinyStreaming,
+        SttModelArch::SmallStreaming => ModelArch::SmallStreaming,
+        SttModelArch::MediumStreaming => ModelArch::MediumStreaming,
+    }
 }
 
 #[cfg(test)]
@@ -303,6 +413,46 @@ mod tests {
         .unwrap();
         assert_eq!(options.config, Some(PathBuf::from("/c.toml")));
         assert!(options.list_voices);
+    }
+
+    #[test]
+    fn only_unused_stt_models_and_files_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = ModelPaths::new(dir.path());
+        let current = paths.stt_dir(LanguageCode::Zh.stt_model());
+        let old = paths.stt_root().join("base-zh");
+        for directory in [&current, &old] {
+            std::fs::create_dir_all(directory).unwrap();
+            std::fs::write(directory.join("tokenizer.bin"), b"").unwrap();
+        }
+        std::fs::write(current.join("frontend.ort"), b"").unwrap();
+        std::fs::write(paths.stt_root().join("notes.txt"), b"").unwrap();
+        let wanted = current.join("tokenizer.bin");
+        assert_eq!(
+            remove_other_stt_models(&paths, &[wanted.as_path()]).unwrap(),
+            [old, current.join("frontend.ort")]
+        );
+        assert!(current.join("tokenizer.bin").is_file());
+        assert!(paths.stt_root().join("notes.txt").is_file());
+    }
+
+    #[test]
+    fn only_onnx_models_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let voices = dir.path().join("ko/piper-voices");
+        std::fs::create_dir_all(&voices).unwrap();
+        for name in ["a.onnx", "a.onnx.json", "a.upstream.model.ort"] {
+            std::fs::write(voices.join(name), b"").unwrap();
+        }
+        assert_eq!(
+            remove_onnx_files(dir.path()).unwrap(),
+            [voices.join("a.onnx")]
+        );
+        assert!(voices.join("a.onnx.json").is_file());
+        assert!(voices.join("a.upstream.model.ort").is_file());
+        assert!(remove_onnx_files(&dir.path().join("missing"))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

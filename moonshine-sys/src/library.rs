@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::mem::ManuallyDrop;
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_void};
 use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::Arc;
 
 use crate::ffi::{self, MoonshineOption, MOONSHINE_ERROR_NONE};
+use crate::transcriber::ModelArch;
 
 /// The library's file name inside the native library directory.
 #[cfg(target_os = "macos")]
@@ -40,6 +41,7 @@ pub enum MoonshineError {
 /// stay valid for the rest of the process: `_library` is never closed.
 pub struct MoonshineLibrary {
     get_version: ffi::GetVersionFn,
+    free_buffer: ffi::FreeBufferFn,
     error_to_string: ffi::ErrorToStringFn,
     pub(crate) load_transcriber_from_files: ffi::LoadTranscriberFromFilesFn,
     pub(crate) free_transcriber: ffi::FreeTranscriberFn,
@@ -48,6 +50,7 @@ pub struct MoonshineLibrary {
     pub(crate) free_tts_synthesizer: ffi::FreeTtsSynthesizerFn,
     get_tts_dependencies: ffi::GetTtsDependenciesFn,
     get_tts_voices: ffi::GetTtsVoicesFn,
+    get_stt_dependencies: ffi::GetSttDependenciesFn,
     pub(crate) text_to_speech: ffi::TextToSpeechFn,
     /// Never closed: onnxruntime and libstdc++ register thread-local
     /// destructors that run when a thread that called into the library
@@ -85,6 +88,7 @@ impl MoonshineLibrary {
         unsafe {
             Ok(Arc::new(MoonshineLibrary {
                 get_version: symbol(&library, b"moonshine_get_version\0")?,
+                free_buffer: symbol(&library, b"moonshine_free_buffer\0")?,
                 error_to_string: symbol(&library, b"moonshine_error_to_string\0")?,
                 load_transcriber_from_files: symbol(
                     &library,
@@ -102,6 +106,7 @@ impl MoonshineLibrary {
                 free_tts_synthesizer: symbol(&library, b"moonshine_free_tts_synthesizer\0")?,
                 get_tts_dependencies: symbol(&library, b"moonshine_get_tts_dependencies\0")?,
                 get_tts_voices: symbol(&library, b"moonshine_get_tts_voices\0")?,
+                get_stt_dependencies: symbol(&library, b"moonshine_get_stt_dependencies\0")?,
                 text_to_speech: symbol(&library, b"moonshine_text_to_speech\0")?,
                 _library: ManuallyDrop::new(library),
             }))
@@ -125,6 +130,27 @@ impl MoonshineLibrary {
             .into_owned()
     }
 
+    /// Frees a buffer the C API returned.
+    ///
+    /// # Safety
+    /// `pointer` must come from the C API and must not be used afterwards.
+    pub(crate) unsafe fn free_buffer(&self, pointer: *mut c_void) {
+        (self.free_buffer)(pointer);
+    }
+
+    /// Copies a C string the C API returned and frees it.
+    ///
+    /// # Safety
+    /// `pointer` must be NULL or a NUL-terminated string from the C API.
+    unsafe fn take_c_string(&self, pointer: *mut c_char) -> Option<String> {
+        if pointer.is_null() {
+            return None;
+        }
+        let text = CStr::from_ptr(pointer).to_string_lossy().into_owned();
+        self.free_buffer(pointer.cast());
+        Some(text)
+    }
+
     pub(crate) fn call_error(&self, function: &'static str, code: i32) -> MoonshineError {
         MoonshineError::Call {
             function,
@@ -133,19 +159,35 @@ impl MoonshineLibrary {
         }
     }
 
-    /// Asset keys (paths relative to `g2p_root`) the synthesizer for
+    /// The files (names relative to `g2p_root`) the synthesizer for
     /// `language_tag` needs, from `moonshine_get_tts_dependencies`.
     pub fn tts_dependencies(
         &self,
         language_tag: &str,
         options: &[(&str, &str)],
-    ) -> Result<Vec<String>, MoonshineError> {
+    ) -> Result<Vec<DependencyFile>, MoonshineError> {
         const FUNCTION: &str = "moonshine_get_tts_dependencies";
         let text = self.json_call(FUNCTION, self.get_tts_dependencies, language_tag, options)?;
-        if text.trim().is_empty() {
-            return Ok(Vec::new());
-        }
-        serde_json::from_str(&text).map_err(|error| invalid_json(FUNCTION, error))
+        manifest_files(FUNCTION, &text)
+    }
+
+    /// The files (names relative to the model directory) of `language`'s
+    /// speech recognition model with architecture `arch`, from
+    /// `moonshine_get_stt_dependencies`. Sizes and crc32c checksums are known.
+    pub fn stt_dependencies(
+        &self,
+        language: &str,
+        arch: ModelArch,
+    ) -> Result<Vec<DependencyFile>, MoonshineError> {
+        const FUNCTION: &str = "moonshine_get_stt_dependencies";
+        let arch = (arch as u32).to_string();
+        let text = self.json_call(
+            FUNCTION,
+            self.get_stt_dependencies,
+            language,
+            &[("model_arch", &arch)],
+        )?;
+        manifest_files(FUNCTION, &text)
     }
 
     /// The voices `moonshine_get_tts_voices` knows for `language_tag`, with
@@ -197,13 +239,38 @@ impl MoonshineLibrary {
                 &mut json,
             )
         };
-        // SAFETY: `json` is NULL or a malloc'd NUL-terminated string we now own.
-        let text = unsafe { take_c_string(json) };
+        // SAFETY: `json` is NULL or a NUL-terminated string the C API allocated.
+        let text = unsafe { self.take_c_string(json) };
         if code != MOONSHINE_ERROR_NONE {
             return Err(self.call_error(function, code));
         }
         Ok(text.unwrap_or_default())
     }
+}
+
+/// One file of a `moonshine_get_*_dependencies` manifest.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct DependencyFile {
+    /// Path relative to the asset root, e.g. `kokoro/voices/af_heart.kokorovoice`.
+    pub name: String,
+    pub url: String,
+    pub size: Option<u64>,
+    /// Base64 digest, or empty when the manifest has none.
+    #[serde(default)]
+    pub checksum: String,
+    /// `crc32c`, or empty.
+    #[serde(default)]
+    pub checksum_type: String,
+}
+
+#[derive(serde::Deserialize)]
+struct Manifest {
+    groups: Vec<ManifestGroup>,
+}
+
+#[derive(serde::Deserialize)]
+struct ManifestGroup {
+    files: Vec<DependencyFile>,
 }
 
 /// One voice from `MoonshineLibrary::tts_voices`.
@@ -220,6 +287,20 @@ struct VoiceJson {
     state: String,
 }
 
+/// Every file of every group in a dependency manifest.
+fn manifest_files(
+    function: &'static str,
+    text: &str,
+) -> Result<Vec<DependencyFile>, MoonshineError> {
+    let manifest: Manifest =
+        serde_json::from_str(text).map_err(|error| invalid_json(function, error))?;
+    Ok(manifest
+        .groups
+        .into_iter()
+        .flat_map(|group| group.files)
+        .collect())
+}
+
 fn invalid_json(function: &'static str, error: serde_json::Error) -> MoonshineError {
     MoonshineError::InvalidOutput {
         function,
@@ -230,27 +311,6 @@ fn invalid_json(function: &'static str, error: serde_json::Error) -> MoonshineEr
 pub(crate) fn c_string(text: &str) -> Result<CString, MoonshineError> {
     CString::new(text)
         .map_err(|_| MoonshineError::InvalidArgument(format!("{text:?} contains a NUL byte")))
-}
-
-/// Copies a malloc'd C string and frees it.
-///
-/// # Safety
-/// `pointer` must be NULL or a NUL-terminated string allocated with `malloc`.
-unsafe fn take_c_string(pointer: *mut c_char) -> Option<String> {
-    if pointer.is_null() {
-        return None;
-    }
-    let text = CStr::from_ptr(pointer).to_string_lossy().into_owned();
-    free_native(pointer.cast());
-    Some(text)
-}
-
-/// Frees memory the C API allocated with `malloc`.
-///
-/// # Safety
-/// `pointer` must come from the C API and must not be used afterwards.
-pub(crate) unsafe fn free_native(pointer: *mut std::os::raw::c_void) {
-    ffi::free(pointer);
 }
 
 /// A `moonshine_option_t` array and the strings it points into.

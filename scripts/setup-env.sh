@@ -123,12 +123,12 @@ else
     record "Native libraries" FAILED "run make native-libs"
 fi
 
-# Models (~3.8 GB; make models skips files it already has)
+# Models (~3.7 GB; make models skips files it already has)
 if [ -f "$MODEL_DIR/.complete" ]; then
     record "Models" ok
 elif [ "$HAS_NATIVE_LIBS" -eq 0 ]; then
     record "Models" skipped "needs the native libraries"
-elif ! confirm "Download the models (~3.8 GB, files already present are kept) into $MODEL_DIR?"; then
+elif ! confirm "Download the models (~3.7 GB, files already present are kept) into $MODEL_DIR?"; then
     record "Models" skipped "run make setup SETUP_ARGS=--yes or make models"
 elif make models MODEL_DIR="$MODEL_DIR"; then
     record "Models" installed

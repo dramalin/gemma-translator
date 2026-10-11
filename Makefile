@@ -59,11 +59,12 @@ release: native-libs
 	ln -sfn $(NATIVE_LIB_DIR) "$$target_dir/release/lib" && \
 	echo "built $$target_dir/release/translator and $$target_dir/release/translator-tui"
 
-## native-libs: download libmoonshine / liblitert-lm into native/<arch>/lib (skipped when present; make -B native-libs refetches)
+## native-libs: download libmoonshine / liblitert-lm into native/<arch>/lib (fetched again when scripts/fetch-native-libs.sh changes; make -B native-libs forces it)
 .PHONY: native-libs
 native-libs: $(NATIVE_LIB_DIR)/.complete
 
-$(NATIVE_LIB_DIR)/.complete:
+# Depends on the script, so pinning another wheel version fetches again.
+$(NATIVE_LIB_DIR)/.complete: scripts/fetch-native-libs.sh
 	scripts/fetch-native-libs.sh $(NATIVE_ARCH)
 
 MODEL_DIR ?= $(CURDIR)/models
@@ -73,7 +74,7 @@ MODEL_DIR ?= $(CURDIR)/models
 CONFIG ?=
 MODELS_ARGS := --lib-dir $(NATIVE_LIB_DIR) --model-dir $(MODEL_DIR) $(if $(CONFIG),--config $(CONFIG))
 
-## models: download every model into MODEL_DIR (default ./models, ~3.8 GB; writes MODEL_DIR/.complete when done), plus the voices config.toml names (CONFIG=<file>)
+## models: download every model into MODEL_DIR (default ./models, ~3.7 GB; writes MODEL_DIR/.complete when done), plus the voices config.toml names (CONFIG=<file>)
 .PHONY: models
 models: native-libs
 	mkdir -p $(MODEL_DIR)

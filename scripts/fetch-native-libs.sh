@@ -10,20 +10,20 @@ ARCH="${1:-$(uname -m)}"
 PYPI=https://files.pythonhosted.org/packages
 case "$OS/$ARCH" in
     Linux/x86_64)
-        MOONSHINE_URL="$PYPI/de/b9/f45749837ecb75a7de2ffed261c0ec12333f66e2e7696b15655717a0e28f/moonshine_voice-0.0.65-py3-none-manylinux_2_34_x86_64.whl"
-        MOONSHINE_SHA256=946e0a056dd3a13ee8cc28dec84c0f01676743a841bae5e6c52a87483b10241b
+        MOONSHINE_URL="$PYPI/a9/9d/228f738b48e0e7cc1de97c3f842b5470c6a3c5f7a0bffbf13c3d00eefb87/moonshine_voice-0.1.5-py3-none-manylinux_2_34_x86_64.whl"
+        MOONSHINE_SHA256=1ed9e0ccf94be4845d69e7fa862dcf4c8b5801a758796966494c694f48184496
         LITERT_URL="$PYPI/36/27/bb0c2e084d59938bc12f960db50e7e8e056337ed286f31468aaa39bc9d9a/litert_lm_api-0.13.1-py3-none-manylinux_2_27_x86_64.whl"
         LITERT_SHA256=b981d55e057be9664f30670d5c1faa6e738ad516a2617dbdac10dc6b5b409cca
         ;;
     Linux/aarch64)
-        MOONSHINE_URL="$PYPI/c4/b7/fe75106ffb8001ef43da1c4b75968c82f0322d9880dd3efccca1f315b556/moonshine_voice-0.0.65-py3-none-manylinux_2_34_aarch64.whl"
-        MOONSHINE_SHA256=e6200c95950f6385a346b220ad046e586221d9a38db30152fa0cd12a809e9e86
+        MOONSHINE_URL="$PYPI/56/b3/ca8c6f3eb47498208e92094d68e3dc2a0ce50213fdf980e212f293872455/moonshine_voice-0.1.5-py3-none-manylinux_2_34_aarch64.whl"
+        MOONSHINE_SHA256=fd9fa38ab58c6a8e64eb43b81b0f491138159c7ce45584bb0736ed7efa539766
         LITERT_URL="$PYPI/12/a7/c23db30dc19ad07a188eeeab48fd8d676554e8647dac6e9dbf62be0f82f1/litert_lm_api-0.13.1-py3-none-manylinux_2_27_aarch64.whl"
         LITERT_SHA256=4092c4f7ad75fb23d83bc5b00a9aa6896a19d75f148515efeef0d079ba22ef74
         ;;
     Darwin/arm64)
-        MOONSHINE_URL="$PYPI/7f/49/93c28833572682c434c60cea8bcf338b74b8f6b2dbe816186c6bb5242c16/moonshine_voice-0.0.65-py3-none-macosx_15_0_arm64.whl"
-        MOONSHINE_SHA256=3e92fa8497bf4fc40b6241e4dc29fd4ac77832f7f3d8addc4fd467a6bf1cf605
+        MOONSHINE_URL="$PYPI/86/2a/9eca2f000e4990315d18aa360c6eb679417b29252e6307c273bcbef38461/moonshine_voice-0.1.5-py3-none-macosx_15_0_arm64.whl"
+        MOONSHINE_SHA256=9866b1956d12fff11923ad42f1140bcb314bf05bf8d8576fb7b3aa819ec40e51
         LITERT_URL="$PYPI/58/ae/5d1e2862d14ad1b08bdbc3392574dde37b98a06f4efb5181d946766ec81c/litert_lm_api-0.13.1-py3-none-macosx_12_0_arm64.whl"
         LITERT_SHA256=4a1bb68dbf5a60af9ac5fe03331968a7b4e91779e721cb531e6b41e71f2a2d77
         ;;

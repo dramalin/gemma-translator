@@ -9,6 +9,7 @@ translator-core = { path = "../translator-core" }
 moonshine-sys = { path = "../moonshine-sys" }
 ureq = { version = "2.12", default-features = false, features = ["tls"] }
 sha2 = "0.10"
+crc32c = "0.6"
 thiserror = "2"
 
 [dev-dependencies]

@@ -24,6 +24,19 @@ records at 16 kHz call quality.
 Record real conditions the same way under another name, for example
 `eval/record.sh zh 50cm` or, on the Pi, `eval/record.sh zh pi-usb`.
 
+Without a speaker of the language, a synthetic set still catches gross
+regressions (it understates noise sensitivity and accent variety). On macOS,
+render each line with a system voice and pad it like a recording:
+
+```bash
+n=0; while IFS= read -r line; do n=$((n+1)); f=$(printf %02d $n)
+  say -v Paulina --file-format=WAVE --data-format=LEI16@22050 -o /tmp/$f.wav "$line"
+  sox /tmp/$f.wav -r 48000 eval/corpus/clean/es/$f.wav pad 0.5 0.5
+done < eval/sentences/es.txt     # mkdir -p eval/corpus/clean/es first
+```
+
+(`say -v '?'` lists the voices: Kyoko for ja, Majed for ar.)
+
 ## 2. Add noise
 
 Record noise where the translator will be used (30 s, nobody talking), then

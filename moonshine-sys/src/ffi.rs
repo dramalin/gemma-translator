@@ -1,9 +1,9 @@
-//! C declarations, copied from moonshine-voice 0.0.65 `moonshine_api.py`.
+//! C declarations, copied from moonshine-voice 0.1.5 `moonshine_api.py`.
 
 use std::os::raw::{c_char, c_void};
 
 /// `MOONSHINE_HEADER_VERSION`; passed to every create call.
-pub const MOONSHINE_HEADER_VERSION: i32 = 20000;
+pub const MOONSHINE_HEADER_VERSION: i32 = 30000;
 pub const MOONSHINE_ERROR_NONE: i32 = 0;
 
 /// `moonshine_option_t`
@@ -35,9 +35,9 @@ pub struct TranscriptLine {
     pub is_updated: i8,
     pub is_new: i8,
     pub has_text_changed: i8,
-    pub has_speaker_id: i8,
-    pub speaker_id: u64,
-    pub speaker_index: u32,
+    pub have_speakers_changed: i8,
+    pub speaker_spans: *const c_void,
+    pub speaker_span_count: u64,
     pub last_transcription_latency_ms: u32,
     pub words: *const TranscriptWord,
     pub word_count: u64,
@@ -83,6 +83,12 @@ pub type GetTtsDependenciesFn = unsafe extern "C" fn(
     options_count: u64,
     out_json: *mut *mut c_char,
 ) -> i32;
+pub type GetSttDependenciesFn = unsafe extern "C" fn(
+    language: *const c_char,
+    options: *const MoonshineOption,
+    options_count: u64,
+    out_json: *mut *mut c_char,
+) -> i32;
 pub type GetTtsVoicesFn = unsafe extern "C" fn(
     languages: *const c_char,
     options: *const MoonshineOption,
@@ -99,7 +105,6 @@ pub type TextToSpeechFn = unsafe extern "C" fn(
     out_sample_rate: *mut i32,
 ) -> i32;
 
-extern "C" {
-    /// libc `free`: the C API returns `malloc`ed strings and audio buffers.
-    pub fn free(pointer: *mut c_void);
-}
+/// `moonshine_free_buffer`: frees the strings and audio buffers the C API
+/// returns, in the library's own C runtime.
+pub type FreeBufferFn = unsafe extern "C" fn(pointer: *mut c_void);

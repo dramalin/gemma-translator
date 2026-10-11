@@ -17,18 +17,18 @@ pub const VAD_FILE_NAME: &str = "silero_vad.onnx";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SttModelArch {
     Tiny,
-    Base,
+    TinyStreaming,
+    SmallStreaming,
     MediumStreaming,
 }
 
+/// A language's speech recognition model. Its files, their URLs and checksums
+/// come from `moonshine_get_stt_dependencies` for the language and `arch`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SttModel {
     /// Directory name under `<model_dir>/stt/`.
     pub name: &'static str,
     pub arch: SttModelArch,
-    /// Each component is fetched from `<download_url>/<component>`.
-    pub download_url: &'static str,
-    pub components: &'static [&'static str],
 }
 
 /// Moonshine TTS language tag, voice and speaking rate.
@@ -76,30 +76,11 @@ impl TtsSettings {
     }
 }
 
-/// Components of a non-streaming model, as Moonshine publishes them.
-const NON_STREAMING_COMPONENTS: &[&str] = &[
-    "encoder_model.ort",
-    "decoder_model_merged.ort",
-    "tokenizer.bin",
-];
-
-/// Components of the English streaming model, including the attention decoder
-/// that only the English model has.
-const ENGLISH_STREAMING_COMPONENTS: &[&str] = &[
-    "adapter.ort",
-    "cross_kv.ort",
-    "decoder_kv.ort",
-    "encoder.ort",
-    "frontend.ort",
-    "streaming_config.json",
-    "tokenizer.bin",
-    "decoder_kv_with_attention.ort",
-];
-
 /// Moonshine stops decoding after this many tokens per second of audio. Its
 /// default suits alphabetic scripts, but a CJK character takes several
 /// byte-level tokens, so the default cuts ja/zh/ko sentences short; 13 was
-/// measured to end the truncation.
+/// measured to end the truncation on base-zh, and tiny-streaming-zh shows
+/// none with it either.
 ///
 /// `vad_threshold` 0 turns off Moonshine's own voice activity detection, so
 /// the whole recording is one segment. Its VAD keeps state from earlier calls,
@@ -129,43 +110,19 @@ impl TtsVoice {
 }
 
 impl LanguageCode {
+    /// Pinned rather than taken from Moonshine's catalog default, so a newer
+    /// library cannot switch a language's model unnoticed. Each is the
+    /// moonshine-voice 0.1.5 default for its language.
     pub fn stt_model(self) -> SttModel {
-        let base = |name: &'static str, download_url: &'static str| SttModel {
-            name,
-            arch: SttModelArch::Base,
-            download_url,
-            components: NON_STREAMING_COMPONENTS,
+        let (name, arch) = match self {
+            LanguageCode::Ar => ("tiny-streaming-ar", SttModelArch::TinyStreaming),
+            LanguageCode::En => ("medium-streaming-en", SttModelArch::MediumStreaming),
+            LanguageCode::Es => ("small-streaming-es", SttModelArch::SmallStreaming),
+            LanguageCode::Ja => ("small-streaming-ja", SttModelArch::SmallStreaming),
+            LanguageCode::Zh => ("tiny-streaming-zh", SttModelArch::TinyStreaming),
+            LanguageCode::Ko => ("tiny-ko", SttModelArch::Tiny),
         };
-        match self {
-            LanguageCode::Ar => base(
-                "base-ar",
-                "https://download.moonshine.ai/model/base-ar/quantized/base-ar",
-            ),
-            LanguageCode::En => SttModel {
-                name: "medium-streaming-en",
-                arch: SttModelArch::MediumStreaming,
-                download_url: "https://download.moonshine.ai/model/medium-streaming-en/quantized",
-                components: ENGLISH_STREAMING_COMPONENTS,
-            },
-            LanguageCode::Es => base(
-                "base-es",
-                "https://download.moonshine.ai/model/base-es/quantized/base-es",
-            ),
-            LanguageCode::Ja => base(
-                "base-ja",
-                "https://download.moonshine.ai/model/base-ja/quantized/base-ja",
-            ),
-            LanguageCode::Zh => base(
-                "base-zh",
-                "https://download.moonshine.ai/model/base-zh/quantized/base-zh",
-            ),
-            LanguageCode::Ko => SttModel {
-                name: "tiny-ko",
-                arch: SttModelArch::Tiny,
-                download_url: "https://download.moonshine.ai/model/tiny-ko/quantized/tiny-ko",
-                components: NON_STREAMING_COMPONENTS,
-            },
-        }
+        SttModel { name, arch }
     }
 
     /// Options for `moonshine_load_transcriber_from_files`.
@@ -218,8 +175,13 @@ impl ModelPaths {
         self.root.join("cache")
     }
 
+    /// The directory every speech recognition model has its own folder in.
+    pub fn stt_root(&self) -> PathBuf {
+        self.root.join("stt")
+    }
+
     pub fn stt_dir(&self, model: SttModel) -> PathBuf {
-        self.root.join("stt").join(model.name)
+        self.stt_root().join(model.name)
     }
 
     /// Moonshine's `g2p_root`: TTS asset keys are paths relative to it.
@@ -239,49 +201,22 @@ mod tests {
 
     #[test]
     fn every_language_has_an_stt_model() {
-        let ko = LanguageCode::Ko.stt_model();
-        assert_eq!(ko.name, "tiny-ko");
-        assert_eq!(ko.arch, SttModelArch::Tiny);
+        let names: Vec<_> = LanguageCode::ALL
+            .iter()
+            .map(|language| language.stt_model().name)
+            .collect();
         assert_eq!(
-            ko.download_url,
-            "https://download.moonshine.ai/model/tiny-ko/quantized/tiny-ko"
-        );
-        assert_eq!(
-            ko.components,
+            names,
             [
-                "encoder_model.ort",
-                "decoder_model_merged.ort",
-                "tokenizer.bin"
+                "tiny-streaming-ar",
+                "medium-streaming-en",
+                "small-streaming-es",
+                "small-streaming-ja",
+                "tiny-streaming-zh",
+                "tiny-ko"
             ]
         );
-
-        let en = LanguageCode::En.stt_model();
-        assert_eq!(en.name, "medium-streaming-en");
-        assert_eq!(en.arch, SttModelArch::MediumStreaming);
-        assert_eq!(
-            en.download_url,
-            "https://download.moonshine.ai/model/medium-streaming-en/quantized"
-        );
-        assert_eq!(en.components.len(), 8);
-        assert!(en.components.contains(&"decoder_kv_with_attention.ort"));
-
-        for language in [
-            LanguageCode::Ar,
-            LanguageCode::Es,
-            LanguageCode::Ja,
-            LanguageCode::Zh,
-        ] {
-            let model = language.stt_model();
-            assert_eq!(model.arch, SttModelArch::Base);
-            assert_eq!(model.name, format!("base-{}", language.code()));
-            assert_eq!(
-                model.download_url,
-                format!(
-                    "https://download.moonshine.ai/model/base-{0}/quantized/base-{0}",
-                    language.code()
-                )
-            );
-        }
+        assert_eq!(LanguageCode::Ko.stt_model().arch, SttModelArch::Tiny);
     }
 
     #[test]

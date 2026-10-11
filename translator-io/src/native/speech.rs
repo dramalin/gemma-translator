@@ -4,7 +4,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 
-use moonshine_sys::{ModelArch, MoonshineLibrary, Synthesizer, Transcriber};
+use moonshine_sys::{DependencyFile, ModelArch, MoonshineLibrary, Synthesizer, Transcriber};
 use onnxruntime_sys::OrtLibrary;
 use translator_core::language::LanguageCode;
 use translator_core::models::{ModelPaths, SttModelArch, TtsSettings, TtsVoice};
@@ -253,7 +253,12 @@ impl SpeechEngines {
         let library = &self.library;
         self.transcribers.get_or_try_insert_with(
             language,
-            || require_files(&directory, model.components),
+            || {
+                let files = library
+                    .stt_dependencies(language.code(), model_arch(model.arch))
+                    .map_err(|error| engine_error(SERVICE, error))?;
+                require_files(&directory, &files)
+            },
             || {
                 Transcriber::load(
                     library,
@@ -289,20 +294,23 @@ impl SpeechEngines {
     }
 }
 
-/// Fails on the first of `files` missing from `directory`, so an
-/// interrupted download points at translator-models.
-fn require_files(directory: &Path, files: &[&str]) -> Result<(), PipelineError> {
-    match files
-        .iter()
-        .map(|file| directory.join(file))
-        .find(|path| !path.is_file())
-    {
-        None => Ok(()),
-        Some(missing) => Err(engine_error(
+/// Fails on the first of `files` missing from `directory` or of another
+/// size than the manifest says, so an interrupted download or a model left
+/// from an older version points at translator-models.
+fn require_files(directory: &Path, files: &[DependencyFile]) -> Result<(), PipelineError> {
+    for file in files {
+        let path = directory.join(&file.name);
+        let problem = match (std::fs::metadata(&path), file.size) {
+            (Err(_), _) => "is missing",
+            (Ok(metadata), Some(size)) if metadata.len() != size => "is from another model version",
+            (Ok(_), _) => continue,
+        };
+        return Err(engine_error(
             SERVICE,
-            format!("{} is missing; run translator-models", missing.display()),
-        )),
+            format!("{} {problem}; run translator-models", path.display()),
+        ));
     }
+    Ok(())
 }
 
 /// The configured voice for `language`, or (logged) its built-in voice when
@@ -358,22 +366,10 @@ fn require_voice(
         }
     }
     let options = voice.synthesizer_options(root_text);
-    let keys = library
+    let files = library
         .tts_dependencies(voice.language_tag, &borrowed(&options))
         .map_err(|error| engine_error(SERVICE, error))?;
-    // Keys without a '/' are G2P override labels, not files.
-    match keys
-        .iter()
-        .filter(|key| key.contains('/'))
-        .map(|key| root.join(key))
-        .find(|path| !path.is_file())
-    {
-        None => Ok(()),
-        Some(missing) => Err(engine_error(
-            SERVICE,
-            format!("{} is missing; run translator-models", missing.display()),
-        )),
-    }
+    require_files(root, &files)
 }
 
 fn tts_root_text(root: &Path) -> Result<&str, PipelineError> {
@@ -402,7 +398,8 @@ fn require_directory(directory: &Path) -> Result<(), PipelineError> {
 fn model_arch(arch: SttModelArch) -> ModelArch {
     match arch {
         SttModelArch::Tiny => ModelArch::Tiny,
-        SttModelArch::Base => ModelArch::Base,
+        SttModelArch::TinyStreaming => ModelArch::TinyStreaming,
+        SttModelArch::SmallStreaming => ModelArch::SmallStreaming,
         SttModelArch::MediumStreaming => ModelArch::MediumStreaming,
     }
 }

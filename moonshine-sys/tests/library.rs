@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use moonshine_sys::{MoonshineError, MoonshineLibrary};
+use moonshine_sys::{DependencyFile, ModelArch, MoonshineError, MoonshineLibrary};
 
 fn native_lib_dir() -> PathBuf {
     PathBuf::from(
@@ -24,45 +24,62 @@ fn missing_library_names_the_path() {
 #[ignore = "needs native libraries: make test-ffi"]
 fn reports_header_version_and_error_strings() {
     let library = MoonshineLibrary::load(&native_lib_dir()).unwrap();
-    assert_eq!(library.version(), 20000);
+    assert_eq!(library.version(), 30000);
     assert_eq!(library.error_message(-3), "Invalid argument");
 }
 
 #[test]
 #[ignore = "needs native libraries: make test-ffi"]
-fn tts_dependencies_match_the_lists_verified_with_python() {
+fn tts_dependencies_list_the_split_ort_models() {
     let library = MoonshineLibrary::load(&native_lib_dir()).unwrap();
     let root = tempfile::tempdir().unwrap();
     let root = root.path().to_str().unwrap();
 
-    let korean = library
-        .tts_dependencies("ko_kr", &[("g2p_root", root)])
-        .unwrap();
+    let names = |files: Vec<DependencyFile>| -> Vec<String> {
+        files.into_iter().map(|file| file.name).collect()
+    };
+    let korean = names(
+        library
+            .tts_dependencies("ko_kr", &[("g2p_root", root)])
+            .unwrap(),
+    );
     assert_eq!(
         korean,
         [
             "ko/dict.tsv",
-            "ko/piper-voices/ko_KR-melotts-medium.onnx",
+            "ko/piper-voices/ko_KR-melotts-medium.upstream.model.ort",
+            "ko/piper-voices/ko_KR-melotts-medium.upstream.weights.ort",
+            "ko/piper-voices/ko_KR-melotts-medium.generator.model.ort",
+            "ko/piper-voices/ko_KR-melotts-medium.generator.weights.ort",
             "ko/piper-voices/ko_KR-melotts-medium.onnx.json",
         ]
     );
 
-    let chinese = library
-        .tts_dependencies(
-            "zh_hans",
-            &[("g2p_root", root), ("voice", "kokoro_zf_xiaoxiao")],
-        )
-        .unwrap();
+    let chinese = names(
+        library
+            .tts_dependencies(
+                "zh_hans",
+                &[("g2p_root", root), ("voice", "kokoro_zf_xiaoxiao")],
+            )
+            .unwrap(),
+    );
     assert_eq!(
         chinese.last().map(String::as_str),
         Some("kokoro/voices/zf_xiaoxiao.kokorovoice")
     );
     assert!(chinese.contains(&"zh_hans/dict.tsv".to_string()));
 
-    let english = library
-        .tts_dependencies("en_us", &[("g2p_root", root)])
-        .unwrap();
+    let english = names(
+        library
+            .tts_dependencies("en_us", &[("g2p_root", root)])
+            .unwrap(),
+    );
     assert!(english.contains(&"kokoro/voices/af_heart.kokorovoice".to_string()));
+    assert!(english.contains(&"kokoro/decoder.weights.ort".to_string()));
+    assert!(
+        english.iter().all(|name| !name.ends_with(".onnx")),
+        "{english:?}"
+    );
 }
 
 #[test]
@@ -111,4 +128,42 @@ fn tts_voices_list_prefixed_ids_and_what_is_on_disk() {
         let voices = library.tts_voices(tag, &[("g2p_root", root)]).unwrap();
         assert!(!voices.is_empty(), "{tag}");
     }
+}
+
+#[test]
+#[ignore = "needs native libraries: make test-ffi"]
+fn stt_dependencies_give_urls_sizes_and_checksums() {
+    let library = MoonshineLibrary::load(&native_lib_dir()).unwrap();
+    let chinese = library
+        .stt_dependencies("zh", ModelArch::TinyStreaming)
+        .unwrap();
+    let encoder = chinese
+        .iter()
+        .find(|file| file.name == "encoder.ort")
+        .unwrap();
+    assert!(
+        encoder
+            .url
+            .starts_with("https://download.moonshine.ai/model/tiny-streaming-zh/"),
+        "{}",
+        encoder.url
+    );
+    assert!(encoder.size.is_some_and(|size| size > 0));
+    assert_eq!(encoder.checksum_type, "crc32c");
+    assert!(!encoder.checksum.is_empty());
+
+    let korean = library.stt_dependencies("ko", ModelArch::Tiny).unwrap();
+    let names: Vec<&str> = korean.iter().map(|file| file.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "encoder_model.ort",
+            "decoder_model_merged.ort",
+            "tokenizer.bin"
+        ]
+    );
+    // Korean publishes no medium streaming model.
+    assert!(library
+        .stt_dependencies("ko", ModelArch::MediumStreaming)
+        .is_err());
 }

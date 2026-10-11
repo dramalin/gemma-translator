@@ -3,7 +3,7 @@ use std::ptr;
 use std::sync::Arc;
 
 use crate::ffi::{MOONSHINE_ERROR_NONE, MOONSHINE_HEADER_VERSION};
-use crate::library::{c_string, free_native, MoonshineError, MoonshineLibrary, OptionArray};
+use crate::library::{c_string, MoonshineError, MoonshineLibrary, OptionArray};
 
 /// A text-to-speech engine for one language. Not `Send`.
 pub struct Synthesizer {
@@ -68,8 +68,8 @@ impl Synthesizer {
             unsafe { std::slice::from_raw_parts(audio, size as usize) }.to_vec()
         };
         if !audio.is_null() {
-            // SAFETY: allocated by the C API with malloc; not used afterwards.
-            unsafe { free_native(audio.cast()) };
+            // SAFETY: allocated by the C API; not used afterwards.
+            unsafe { self.library.free_buffer(audio.cast()) };
         }
         if code != MOONSHINE_ERROR_NONE {
             return Err(self.library.call_error(FUNCTION, code));
