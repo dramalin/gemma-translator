@@ -22,6 +22,22 @@ pub enum SttModelArch {
     MediumStreaming,
 }
 
+impl SttModelArch {
+    pub fn is_streaming(self) -> bool {
+        !matches!(self, SttModelArch::Tiny)
+    }
+}
+
+/// Silence appended after the trimmed speech for a streaming model, in ms.
+/// Its encoder looks ahead, so the last word of a recording that ends with
+/// only `speech_trim`'s 300 ms of room sound came out wrong ("served" as
+/// "sir", "bill" as "bills"); with moonshine-voice 0.1.5 English WER rose
+/// from about 1.0% to 2.4%. Digital silence after it restored English and
+/// improved every other streaming language on the eval sets; 250 ms was the
+/// only length that beat 0.0.65 for both English and Chinese, since 500 ms
+/// or more again gave Chinese invented endings in loud fan noise.
+pub const STREAMING_TAIL_PADDING_MS: u32 = 250;
+
 /// A language's speech recognition model. Its files, their URLs and checksums
 /// come from `moonshine_get_stt_dependencies` for the language and `arch`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +45,19 @@ pub struct SttModel {
     /// Directory name under `<model_dir>/stt/`.
     pub name: &'static str,
     pub arch: SttModelArch,
+}
+
+impl SttModel {
+    /// Silence to append after the trimmed speech (see
+    /// `STREAMING_TAIL_PADDING_MS`); none for the non-streaming Korean model,
+    /// which was not measured with it.
+    pub fn tail_padding_ms(self) -> u32 {
+        if self.arch.is_streaming() {
+            STREAMING_TAIL_PADDING_MS
+        } else {
+            0
+        }
+    }
 }
 
 /// Moonshine TTS language tag, voice and speaking rate.
@@ -217,6 +246,16 @@ mod tests {
             ]
         );
         assert_eq!(LanguageCode::Ko.stt_model().arch, SttModelArch::Tiny);
+    }
+
+    #[test]
+    fn only_streaming_models_get_tail_padding() {
+        assert_eq!(LanguageCode::Ko.stt_model().tail_padding_ms(), 0);
+        for language in LanguageCode::ALL {
+            if language != LanguageCode::Ko {
+                assert_eq!(language.stt_model().tail_padding_ms(), 250, "{language:?}");
+            }
+        }
     }
 
     #[test]

@@ -8,6 +8,9 @@
 //! goes, the detector alone sometimes cuts off a quiet first syllable;
 //! `TrimMode::Adaptive` uses the level unless the detector shows that a
 //! stretch the level counted as speech is not.
+//!
+//! A streaming recognizer then gets `pad_tail`'s silence after the speech to
+//! look ahead at.
 
 use std::ops::Range;
 
@@ -163,6 +166,13 @@ fn adaptive_speech(
     }
 }
 
+/// Appends `ms` of silence, which a streaming recognizer needs after the
+/// speech to look ahead at (`translator_core::models::STREAMING_TAIL_PADDING_MS`).
+pub fn pad_tail(samples: &mut Vec<f32>, sample_rate: u32, ms: u32) {
+    let count = (u64::from(sample_rate) * u64::from(ms) / 1000) as usize;
+    samples.resize(samples.len() + count, 0.0);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +324,16 @@ mod tests {
             adaptive_speech(level.clone(), None, seconds(4.0), RATE),
             level
         );
+    }
+
+    #[test]
+    fn pad_tail_appends_silence() {
+        let mut samples = vec![0.5; 3];
+        pad_tail(&mut samples, 16_000, 250);
+        assert_eq!(samples.len(), 3 + 4_000);
+        assert_eq!(&samples[..3], [0.5; 3]);
+        assert!(samples[3..].iter().all(|&sample| sample == 0.0));
+        pad_tail(&mut samples, 16_000, 0);
+        assert_eq!(samples.len(), 4_003);
     }
 }

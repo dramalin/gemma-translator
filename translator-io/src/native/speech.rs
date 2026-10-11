@@ -16,7 +16,7 @@ use translator_core::text::clean_transcript;
 use super::engine_error;
 use super::lru::LruCache;
 use super::vad::SileroVad;
-use crate::speech_trim::{trim_speech, TrimMode};
+use crate::speech_trim::{pad_tail, trim_speech, TrimMode};
 
 const SERVICE: &str = "speech engine";
 /// Models kept loaded per kind (recognizer, voice); each is large.
@@ -169,7 +169,12 @@ fn run_speech_thread(
                 language,
                 reply,
             } => {
-                let samples = engines.trim(samples);
+                let mut samples = engines.trim(samples);
+                pad_tail(
+                    &mut samples,
+                    STT_SAMPLE_RATE,
+                    language.stt_model().tail_padding_ms(),
+                );
                 let result = engines.transcriber(language).and_then(|transcriber| {
                     transcriber
                         .transcribe(&samples, STT_SAMPLE_RATE)
