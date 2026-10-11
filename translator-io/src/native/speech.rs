@@ -1,9 +1,7 @@
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
+use std::sync::Arc;
 
 use moonshine_sys::{DependencyFile, ModelArch, MoonshineLibrary, Synthesizer, Transcriber};
 use onnxruntime_sys::OrtLibrary;
@@ -17,22 +15,17 @@ use translator_core::text::clean_transcript;
 use super::engine_error;
 use super::lru::LruCache;
 use super::vad::SileroVad;
+use super::worker::Worker;
 use crate::speech_trim::{pad_tail, trim_speech, TrimMode};
 
 const SERVICE: &str = "speech engine";
 /// Models kept loaded per kind (recognizer, voice); each is large.
 const MODELS_PER_KIND: usize = 2;
-/// How long dropping a `NativeSpeech` waits for its thread to free the
-/// models: long enough for a request in progress to finish.
-const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 
 /// Speech recognition and synthesis on one thread that owns every Moonshine handle.
+/// Dropping it waits for the thread to free the models (see `Worker`).
 pub struct NativeSpeech {
-    /// `None` once dropping has begun.
-    requests: Option<Sender<SpeechRequest>>,
-    /// Disconnects when the thread has freed every handle. (A `Mutex` only
-    /// to make `NativeSpeech` `Sync`; only `drop` uses it.)
-    finished: Mutex<Receiver<()>>,
+    worker: Worker<SpeechRequest>,
 }
 
 enum SpeechRequest {
@@ -86,41 +79,15 @@ impl NativeSpeech {
         trim: TrimMode,
         tts: TtsSettings,
     ) -> NativeSpeech {
-        let (requests, receiver) = mpsc::channel();
-        let (finished_sender, finished) = mpsc::channel::<()>();
-        thread::Builder::new()
-            .name("speech".to_string())
-            .spawn(move || {
-                run_speech_thread(&lib_dir, paths, &preload, trim, tts, receiver);
-                drop(finished_sender);
-            })
-            .expect("spawning the speech thread");
         NativeSpeech {
-            requests: Some(requests),
-            finished: Mutex::new(finished),
+            worker: Worker::spawn("speech", move |requests| {
+                run_speech_thread(&lib_dir, paths, &preload, trim, tts, requests)
+            }),
         }
     }
 
     fn send(&self, request: SpeechRequest) -> Result<(), PipelineError> {
-        self.requests
-            .as_ref()
-            .ok_or_else(stopped)?
-            .send(request)
-            .map_err(|_| stopped())
-    }
-}
-
-/// Closes the request channel and waits (up to `SHUTDOWN_WAIT`) until the
-/// thread has freed the models. Process exit must not run while it does:
-/// libmoonshine and ONNX Runtime tearing down on this thread as the C++
-/// runtime shuts down threw a C++ exception into Rust, which aborts (6 of 30
-/// exits under full CPU load).
-impl Drop for NativeSpeech {
-    fn drop(&mut self) {
-        self.requests = None;
-        if let Ok(finished) = self.finished.get_mut() {
-            let _ = finished.recv_timeout(SHUTDOWN_WAIT);
-        }
+        self.worker.send(request).map_err(|_| stopped())
     }
 }
 

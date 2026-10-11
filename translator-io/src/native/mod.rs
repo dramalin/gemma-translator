@@ -6,6 +6,7 @@ pub mod lru;
 pub mod speech;
 pub mod translator;
 pub mod vad;
+mod worker;
 
 use std::fmt::Display;
 use std::path::PathBuf;

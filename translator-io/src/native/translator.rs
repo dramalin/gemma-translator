@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
-use std::thread;
 use std::time::Duration;
 
 use litert_lm_sys::{Engine, LiteRtLmLibrary, StreamEnd};
@@ -13,14 +12,16 @@ use translator_core::pipeline::{PipelineError, Translator};
 use translator_core::text::{clean_model_reply, translation_system_prompt, SentenceSplitter};
 
 use super::engine_error;
+use super::worker::Worker;
 
 const SERVICE: &str = "translation engine";
 /// How often a waiting job thread checks its cancel flag.
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Streaming translation on one thread that owns the litert-lm engine.
+/// Dropping it waits for the thread to free the engine (see `Worker`).
 pub struct NativeTranslator {
-    requests: Sender<TranslateRequest>,
+    worker: Worker<TranslateRequest>,
 }
 
 struct TranslateRequest {
@@ -42,12 +43,11 @@ impl NativeTranslator {
     /// Starts the model thread, which loads `liblitert-lm` and Gemma
     /// before serving requests (requests sent meanwhile wait in the queue).
     pub fn spawn(lib_dir: PathBuf, paths: ModelPaths) -> NativeTranslator {
-        let (requests, receiver) = mpsc::channel();
-        thread::Builder::new()
-            .name("model".to_string())
-            .spawn(move || run_model_thread(&lib_dir, &paths, receiver))
-            .expect("spawning the model thread");
-        NativeTranslator { requests }
+        NativeTranslator {
+            worker: Worker::spawn("model", move |requests| {
+                run_model_thread(&lib_dir, &paths, requests)
+            }),
+        }
     }
 }
 
@@ -66,7 +66,7 @@ impl Translator for NativeTranslator {
     ) -> Result<(), PipelineError> {
         let request_cancel = Arc::new(AtomicBool::new(false));
         let (events, receiver) = mpsc::channel();
-        self.requests
+        self.worker
             .send(TranslateRequest {
                 text: text.to_string(),
                 source,
@@ -165,6 +165,7 @@ fn translate_once(engine: &Engine, request: &TranslateRequest) -> Result<(), Pip
 
 #[cfg(test)]
 mod tests {
+    use std::thread;
     use std::time::{Duration, Instant};
 
     use super::*;
@@ -172,13 +173,13 @@ mod tests {
     fn with_fake_worker(
         script: impl FnOnce(TranslateRequest) + Send + 'static,
     ) -> NativeTranslator {
-        let (requests, receiver) = mpsc::channel::<TranslateRequest>();
-        thread::spawn(move || {
-            if let Ok(request) = receiver.recv() {
-                script(request);
-            }
-        });
-        NativeTranslator { requests }
+        NativeTranslator {
+            worker: Worker::spawn("test", move |requests: Receiver<TranslateRequest>| {
+                if let Ok(request) = requests.recv() {
+                    script(request);
+                }
+            }),
+        }
     }
 
     fn translate(
@@ -270,9 +271,11 @@ mod tests {
 
     #[test]
     fn stopped_worker_is_an_error() {
-        let (requests, receiver) = mpsc::channel::<TranslateRequest>();
-        drop(receiver);
-        let translator = NativeTranslator { requests };
+        let translator = NativeTranslator {
+            worker: Worker::spawn("test", |requests: Receiver<TranslateRequest>| {
+                drop(requests)
+            }),
+        };
         let (result, _) = translate(&translator, &AtomicBool::new(false));
         assert!(result.unwrap_err().to_string().contains("stopped"));
     }
