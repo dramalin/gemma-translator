@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::mem::ManuallyDrop;
 use std::os::raw::c_char;
@@ -46,6 +47,7 @@ pub struct MoonshineLibrary {
     pub(crate) create_tts_synthesizer_from_files: ffi::CreateTtsSynthesizerFromFilesFn,
     pub(crate) free_tts_synthesizer: ffi::FreeTtsSynthesizerFn,
     get_tts_dependencies: ffi::GetTtsDependenciesFn,
+    get_tts_voices: ffi::GetTtsVoicesFn,
     pub(crate) text_to_speech: ffi::TextToSpeechFn,
     /// Never closed: onnxruntime and libstdc++ register thread-local
     /// destructors that run when a thread that called into the library
@@ -99,6 +101,7 @@ impl MoonshineLibrary {
                 )?,
                 free_tts_synthesizer: symbol(&library, b"moonshine_free_tts_synthesizer\0")?,
                 get_tts_dependencies: symbol(&library, b"moonshine_get_tts_dependencies\0")?,
+                get_tts_voices: symbol(&library, b"moonshine_get_tts_voices\0")?,
                 text_to_speech: symbol(&library, b"moonshine_text_to_speech\0")?,
                 _library: ManuallyDrop::new(library),
             }))
@@ -138,12 +141,56 @@ impl MoonshineLibrary {
         options: &[(&str, &str)],
     ) -> Result<Vec<String>, MoonshineError> {
         const FUNCTION: &str = "moonshine_get_tts_dependencies";
+        let text = self.json_call(FUNCTION, self.get_tts_dependencies, language_tag, options)?;
+        if text.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        serde_json::from_str(&text).map_err(|error| invalid_json(FUNCTION, error))
+    }
+
+    /// The voices `moonshine_get_tts_voices` knows for `language_tag`, with
+    /// ids as the `voice` option takes them (`kokoro_...` or `piper_...`).
+    /// `found` is accurate only with a `g2p_root` option.
+    pub fn tts_voices(
+        &self,
+        language_tag: &str,
+        options: &[(&str, &str)],
+    ) -> Result<Vec<TtsVoiceEntry>, MoonshineError> {
+        const FUNCTION: &str = "moonshine_get_tts_voices";
+        let text = self.json_call(FUNCTION, self.get_tts_voices, language_tag, options)?;
+        let mut languages: HashMap<String, Vec<VoiceJson>> =
+            serde_json::from_str(&text).map_err(|error| invalid_json(FUNCTION, error))?;
+        let voices =
+            languages
+                .remove(language_tag)
+                .ok_or_else(|| MoonshineError::InvalidOutput {
+                    function: FUNCTION,
+                    message: format!("no entry for {language_tag}"),
+                })?;
+        Ok(voices
+            .into_iter()
+            .map(|voice| TtsVoiceEntry {
+                found: voice.state == "found",
+                id: voice.id,
+            })
+            .collect())
+    }
+
+    /// Calls one of the functions that take a language list and options and
+    /// return a malloc'd JSON string.
+    fn json_call(
+        &self,
+        function: &'static str,
+        call: ffi::GetTtsDependenciesFn,
+        language_tag: &str,
+        options: &[(&str, &str)],
+    ) -> Result<String, MoonshineError> {
         let language_tag = c_string(language_tag)?;
         let options = OptionArray::new(options)?;
         let mut json: *mut c_char = ptr::null_mut();
         // SAFETY: all pointers are valid for the call; `json` receives a malloc'd string.
         let code = unsafe {
-            (self.get_tts_dependencies)(
+            call(
                 language_tag.as_ptr(),
                 options.as_ptr(),
                 options.len(),
@@ -153,16 +200,30 @@ impl MoonshineLibrary {
         // SAFETY: `json` is NULL or a malloc'd NUL-terminated string we now own.
         let text = unsafe { take_c_string(json) };
         if code != MOONSHINE_ERROR_NONE {
-            return Err(self.call_error(FUNCTION, code));
+            return Err(self.call_error(function, code));
         }
-        let text = text.unwrap_or_default();
-        if text.trim().is_empty() {
-            return Ok(Vec::new());
-        }
-        serde_json::from_str(&text).map_err(|error| MoonshineError::InvalidOutput {
-            function: FUNCTION,
-            message: error.to_string(),
-        })
+        Ok(text.unwrap_or_default())
+    }
+}
+
+/// One voice from `MoonshineLibrary::tts_voices`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TtsVoiceEntry {
+    pub id: String,
+    /// Whether the voice's files are under the `g2p_root` option.
+    pub found: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct VoiceJson {
+    id: String,
+    state: String,
+}
+
+fn invalid_json(function: &'static str, error: serde_json::Error) -> MoonshineError {
+    MoonshineError::InvalidOutput {
+        function,
+        message: error.to_string(),
     }
 }
 

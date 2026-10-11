@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -6,7 +7,7 @@ use std::thread;
 use moonshine_sys::{ModelArch, MoonshineLibrary, Synthesizer, Transcriber};
 use onnxruntime_sys::OrtLibrary;
 use translator_core::language::LanguageCode;
-use translator_core::models::{ModelPaths, SttModelArch};
+use translator_core::models::{ModelPaths, SttModelArch, TtsSettings, TtsVoice};
 use translator_core::pipeline::{
     AudioClip, PipelineError, SpeechToText, TextToSpeech, STT_SAMPLE_RATE,
 };
@@ -56,22 +57,31 @@ impl SpeechRequest {
 impl NativeSpeech {
     /// Starts the speech thread. It loads `libmoonshine` from `lib_dir`,
     /// then both kinds of model for each `preload` language, then serves
-    /// requests. Recordings are trimmed with `TrimMode::Adaptive`.
+    /// requests. Recordings are trimmed with `TrimMode::Adaptive`, and every
+    /// language speaks with its built-in voice.
     pub fn spawn(lib_dir: PathBuf, paths: ModelPaths, preload: Vec<LanguageCode>) -> NativeSpeech {
-        NativeSpeech::spawn_with_trim(lib_dir, paths, preload, TrimMode::Adaptive)
+        NativeSpeech::spawn_with(
+            lib_dir,
+            paths,
+            preload,
+            TrimMode::Adaptive,
+            TtsSettings::default(),
+        )
     }
 
-    /// `spawn` with another way of trimming recordings, for evaluation.
-    pub fn spawn_with_trim(
+    /// `spawn` with the config's voices and speaking rate, or with another
+    /// way of trimming recordings (for evaluation).
+    pub fn spawn_with(
         lib_dir: PathBuf,
         paths: ModelPaths,
         preload: Vec<LanguageCode>,
         trim: TrimMode,
+        tts: TtsSettings,
     ) -> NativeSpeech {
         let (requests, receiver) = mpsc::channel();
         thread::Builder::new()
             .name("speech".to_string())
-            .spawn(move || run_speech_thread(&lib_dir, paths, &preload, trim, receiver))
+            .spawn(move || run_speech_thread(&lib_dir, paths, &preload, trim, tts, receiver))
             .expect("spawning the speech thread");
         NativeSpeech { requests }
     }
@@ -114,6 +124,7 @@ fn run_speech_thread(
     paths: ModelPaths,
     preload: &[LanguageCode],
     trim: TrimMode,
+    tts: TtsSettings,
     requests: Receiver<SpeechRequest>,
 ) {
     let library = match MoonshineLibrary::load(lib_dir) {
@@ -138,6 +149,7 @@ fn run_speech_thread(
         synthesizers: LruCache::new(MODELS_PER_KIND),
         trim,
         vad,
+        tts,
     };
     for &language in preload {
         if let Err(error) = engines.transcriber(language) {
@@ -211,6 +223,7 @@ struct SpeechEngines {
     synthesizers: LruCache<LanguageCode, Synthesizer>,
     trim: TrimMode,
     vad: Option<SileroVad>,
+    tts: TtsSettings,
 }
 
 impl SpeechEngines {
@@ -256,27 +269,21 @@ impl SpeechEngines {
     fn synthesizer(&mut self, language: LanguageCode) -> Result<&mut Synthesizer, PipelineError> {
         let root = self.paths.tts_root();
         let library = &self.library;
+        let tts = &self.tts;
+        // Chosen by the check, used by the create.
+        let chosen = Cell::new(None);
         self.synthesizers.get_or_try_insert_with(
             language,
-            || require_directory(&root),
             || {
-                let root_text = root.to_str().ok_or_else(|| {
-                    engine_error(SERVICE, format!("{} is not UTF-8", root.display()))
-                })?;
-                let voice = language.tts_voice();
-                Synthesizer::create(
-                    library,
-                    voice.language_tag,
-                    &voice.synthesizer_options(root_text),
-                )
-                // The C side resolves the voice's files, so a partial download
-                // surfaces only as this failure.
-                .map_err(|error| {
-                    engine_error(
-                        SERVICE,
-                        format!("{error}; if TTS files are missing, run translator-models"),
-                    )
-                })
+                require_directory(&root)?;
+                chosen.set(Some(usable_voice(library, &root, tts, language)?));
+                Ok(())
+            },
+            || {
+                let voice = chosen.take().expect("the check chose a voice");
+                let options = voice.synthesizer_options(tts_root_text(&root)?);
+                Synthesizer::create(library, voice.language_tag, &borrowed(&options))
+                    .map_err(|error| engine_error(SERVICE, error))
             },
         )
     }
@@ -296,6 +303,89 @@ fn require_files(directory: &Path, files: &[&str]) -> Result<(), PipelineError> 
             format!("{} is missing; run translator-models", missing.display()),
         )),
     }
+}
+
+/// The configured voice for `language`, or (logged) its built-in voice when
+/// the configured one is unknown or not downloaded: a synthesis error would
+/// end the whole job, translation included.
+fn usable_voice(
+    library: &MoonshineLibrary,
+    root: &Path,
+    tts: &TtsSettings,
+    language: LanguageCode,
+) -> Result<TtsVoice, PipelineError> {
+    let configured = tts.voice(language);
+    let built_in = TtsVoice {
+        speed: configured.speed,
+        ..language.tts_voice()
+    };
+    if configured == built_in {
+        return require_voice(library, root, &built_in).map(|()| built_in);
+    }
+    match require_voice(library, root, &configured) {
+        Ok(()) => Ok(configured),
+        Err(error) => {
+            eprintln!(
+                "[speech] {error}; {} speaks with its built-in voice",
+                language.code()
+            );
+            require_voice(library, root, &built_in).map(|()| built_in)
+        }
+    }
+}
+
+/// Fails when `voice` is not one of its language's voices or its files are
+/// missing: Moonshine would otherwise fall back to a voice of its choosing,
+/// or fail without naming the file.
+fn require_voice(
+    library: &MoonshineLibrary,
+    root: &Path,
+    voice: &TtsVoice,
+) -> Result<(), PipelineError> {
+    let root_text = tts_root_text(root)?;
+    if let Some(id) = &voice.voice {
+        let known = library
+            .tts_voices(voice.language_tag, &[("g2p_root", root_text)])
+            .map_err(|error| engine_error(SERVICE, error))?;
+        if !known.iter().any(|entry| entry.id == *id) {
+            return Err(engine_error(
+                SERVICE,
+                format!(
+                    "{id} is not a {} voice; translator-models lists them",
+                    voice.language_tag
+                ),
+            ));
+        }
+    }
+    let options = voice.synthesizer_options(root_text);
+    let keys = library
+        .tts_dependencies(voice.language_tag, &borrowed(&options))
+        .map_err(|error| engine_error(SERVICE, error))?;
+    // Keys without a '/' are G2P override labels, not files.
+    match keys
+        .iter()
+        .filter(|key| key.contains('/'))
+        .map(|key| root.join(key))
+        .find(|path| !path.is_file())
+    {
+        None => Ok(()),
+        Some(missing) => Err(engine_error(
+            SERVICE,
+            format!("{} is missing; run translator-models", missing.display()),
+        )),
+    }
+}
+
+fn tts_root_text(root: &Path) -> Result<&str, PipelineError> {
+    root.to_str()
+        .ok_or_else(|| engine_error(SERVICE, format!("{} is not UTF-8", root.display())))
+}
+
+fn borrowed<'a>(options: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
+    options
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect()
 }
 
 fn require_directory(directory: &Path) -> Result<(), PipelineError> {

@@ -19,7 +19,8 @@ make clippy             # clippy with -D warnings
 make fmt                # cargo fmt --all
 make clean              # cargo clean + rm -rf dist (keeps native/ and models/)
 make native-libs        # fetch pinned libmoonshine / liblitert-lm into native/<arch>/lib
-make models             # download all models into MODEL_DIR (default ./models)
+make models             # download all models into MODEL_DIR (default ./models), plus the config's [tts_voices] (CONFIG=<file>)
+make voices             # list every TTS voice per language (* = downloaded)
 make test-ffi           # #[ignore]d tests that need native libs + models
 make test-soak          # long-running native memory tests
 make eval-stt           # score STT on the recorded corpus in eval/ (see eval/README.md)
@@ -43,6 +44,7 @@ The Rust workspace (`litert-lm-sys`, `moonshine-sys`, `onnxruntime-sys`, `transl
 - `translator-app`: UI-independent `AppState` (audio, job runner, volume, config saving), the `AppView` view model, mock services and CLI parsing, shared by both frontends. Frontends call `handle_key`, `tick` and `view`; `RecordStyle::Hold` (Slint) vs `Toggle` (TUI). `AppState::headless` runs without audio devices or volume commands, for tests.
 - `translator-tui`: ratatui/crossterm terminal frontend (`make run-tui`). Filters auto-repeat on the recording keys (1 s window), ignores Ctrl/Alt combinations, exits cleanly on SIGTERM/SIGINT/SIGHUP, and redirects fd 2 to `~/.local/state/gemma-translator/translator-tui.log` while running; only a main-thread panic restores the terminal.
 - `translator-models`: downloads Gemma, the Moonshine STT models, TTS assets and the Silero VAD into `model_dir` (layout in `translator-core/src/models.rs`). `make models` always runs it; it skips files already verified.
+- TTS voices: `tts_speed` and `[tts_voices]` in `config.toml` become `TtsSettings` (`translator-core/src/models.rs`), the single place that resolves a language's voice for both `translator-models` and the speech thread. `translator-models` reads the config (`--config`, else the default path), rejects ids that `moonshine_get_tts_voices` does not list for the language, and fetches the built-in voices plus the configured ones. The speech thread checks the voice itself (Moonshine would silently pick another one) and falls back, logged, to the built-in voice: a TTS error ends the whole job in `JobRunner`, translation included.
 - Native tests are `#[ignore]`d: `make native-libs models test-ffi`.
 - `make native-libs` needs `patchelf` (it sets the RUNPATH on the fetched `.so` files). The native libraries print log lines into `make test-ffi` output, so count results from the `test result:` lines only.
 - Pi packaging: `deploy/Dockerfile.pi` (Debian bookworm, arm64 dev packages) via `Cross.toml`; `scripts/check-symbol-versions.sh` caps GLIBC_2.36 / GLIBCXX_3.4.30; `deploy/install.sh` checks a fixed runtime package list before changing anything and enables linger so PipeWire runs without a desktop session.

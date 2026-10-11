@@ -83,6 +83,12 @@ pub type GetTtsDependenciesFn = unsafe extern "C" fn(
     options_count: u64,
     out_json: *mut *mut c_char,
 ) -> i32;
+pub type GetTtsVoicesFn = unsafe extern "C" fn(
+    languages: *const c_char,
+    options: *const MoonshineOption,
+    options_count: u64,
+    out_json: *mut *mut c_char,
+) -> i32;
 pub type TextToSpeechFn = unsafe extern "C" fn(
     handle: i32,
     text: *const c_char,

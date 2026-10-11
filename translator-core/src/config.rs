@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -6,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::keys::KeyboardMode;
 use crate::language::{rotate_language, LanguageCode, RotateDirection};
+use crate::models::{TtsSettings, DEFAULT_TTS_SPEED, TTS_SPEED_RANGE};
 
 pub const VISUALIZER_BARS_MIN: u32 = 8;
 pub const VISUALIZER_BARS_MAX: u32 = 128;
@@ -97,6 +99,12 @@ pub struct Config {
     pub audio_input_device: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub audio_output_device: Option<String>,
+    /// Speaking rate of every voice; 1.0 is Moonshine's normal pace.
+    pub tts_speed: f64,
+    /// Moonshine voice ids by language (`[tts_voices]`, e.g.
+    /// `zh = "kokoro_zm_yunxi"`); `translator-models` checks and fetches them.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub tts_voices: BTreeMap<LanguageCode, String>,
 }
 
 impl Default for Config {
@@ -111,6 +119,8 @@ impl Default for Config {
             model_dir: PathBuf::from("/var/lib/gemma-translator/models"),
             audio_input_device: None,
             audio_output_device: None,
+            tts_speed: DEFAULT_TTS_SPEED,
+            tts_voices: BTreeMap::new(),
         }
     }
 }
@@ -177,11 +187,29 @@ impl Config {
         fs::rename(&temp_path, path).map_err(write_error)
     }
 
+    pub fn tts_settings(&self) -> TtsSettings {
+        TtsSettings {
+            speed: self.tts_speed,
+            voices: self.tts_voices.clone(),
+        }
+    }
+
     fn normalized(mut self) -> Config {
         let bars = self
             .visualizer_bars
             .clamp(VISUALIZER_BARS_MIN, VISUALIZER_BARS_MAX);
         self.visualizer_bars = bars / VISUALIZER_BARS_STEP * VISUALIZER_BARS_STEP;
+        self.tts_speed = if self.tts_speed.is_finite() {
+            self.tts_speed
+                .clamp(*TTS_SPEED_RANGE.start(), *TTS_SPEED_RANGE.end())
+        } else {
+            DEFAULT_TTS_SPEED
+        };
+        self.tts_voices = std::mem::take(&mut self.tts_voices)
+            .into_iter()
+            .map(|(language, voice)| (language, voice.trim().to_string()))
+            .filter(|(_, voice)| !voice.is_empty())
+            .collect();
         if self.lane1_language == self.lane2_language {
             self.lane2_language = rotate_language(
                 self.lane2_language,
@@ -341,6 +369,61 @@ mod tests {
         );
         assert_eq!(ThemeColor::Orange.rgb(), (0xff, 0xa5, 0x00));
         assert_eq!(ThemeColor::Blue.name(), "BLUE");
+    }
+
+    #[test]
+    fn tts_voices_and_speed_round_trip_and_are_normalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "tts_speed = 1.2\n[tts_voices]\nzh = \" kokoro_zm_yunxi \"\nen = \"\"\n",
+        )
+        .unwrap();
+        let config = Config::load(&path).unwrap();
+        assert_eq!(config.tts_speed, 1.2);
+        assert_eq!(
+            config.tts_voices,
+            BTreeMap::from([(LanguageCode::Zh, "kokoro_zm_yunxi".to_string())])
+        );
+        config.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("tts_speed = 1.2\n"), "{text}");
+        assert!(
+            text.contains("[tts_voices]\nzh = \"kokoro_zm_yunxi\""),
+            "{text}"
+        );
+        assert_eq!(Config::load(&path).unwrap(), config);
+
+        for (written, expected) in [("0.1", 0.5), ("9", 2.0), ("nan", 1.0)] {
+            std::fs::write(&path, format!("tts_speed = {written}\n")).unwrap();
+            assert_eq!(
+                Config::load(&path).unwrap().tts_speed,
+                expected,
+                "{written}"
+            );
+        }
+    }
+
+    #[test]
+    fn tts_voices_default_to_none_and_are_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        Config::default().save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("tts_voices"), "{text}");
+        assert!(text.contains("tts_speed = 1.0"), "{text}");
+    }
+
+    #[test]
+    fn unknown_tts_voice_language_is_a_parse_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[tts_voices]\nfr = \"kokoro_ff_siwis\"\n").unwrap();
+        assert!(matches!(
+            Config::load(&path),
+            Err(ConfigError::Parse { .. })
+        ));
     }
 
     #[test]

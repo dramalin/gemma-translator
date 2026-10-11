@@ -68,15 +68,25 @@ $(NATIVE_LIB_DIR)/.complete:
 
 MODEL_DIR ?= $(CURDIR)/models
 
-## models: download every model into MODEL_DIR (default ./models, ~3.8 GB; writes MODEL_DIR/.complete when done)
+# The config whose [tts_voices] translator-models checks and fetches; empty
+# means the translator's default (~/.config/gemma-translator/config.toml).
+CONFIG ?=
+MODELS_ARGS := --lib-dir $(NATIVE_LIB_DIR) --model-dir $(MODEL_DIR) $(if $(CONFIG),--config $(CONFIG))
+
+## models: download every model into MODEL_DIR (default ./models, ~3.8 GB; writes MODEL_DIR/.complete when done), plus the voices config.toml names (CONFIG=<file>)
 .PHONY: models
 models: native-libs
 	mkdir -p $(MODEL_DIR)
 	[ "$(MODEL_DIR)" != "$(CURDIR)/models" ] || printf '*\n' > $(MODEL_DIR)/.gitignore
-	$(CARGO) run --release -p translator-models -- --lib-dir $(NATIVE_LIB_DIR) --model-dir $(MODEL_DIR)
+	$(CARGO) run --release -p translator-models -- $(MODELS_ARGS)
 	touch $(MODEL_DIR)/.complete
 
 FFI_ENV := TRANSLATOR_NATIVE_LIB_DIR=$(NATIVE_LIB_DIR) TRANSLATOR_MODEL_DIR=$(MODEL_DIR)
+
+## voices: list every TTS voice per language (* = downloaded), for [tts_voices] in config.toml
+.PHONY: voices
+voices: native-libs
+	$(CARGO) run --release -p translator-models -- $(MODELS_ARGS) --list-voices
 
 ## test-ffi: run the tests that need native libraries and models (after make models)
 .PHONY: test-ffi

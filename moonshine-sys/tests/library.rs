@@ -85,3 +85,30 @@ fn option_with_nul_byte_is_rejected_before_the_call() {
         .unwrap_err();
     assert!(matches!(error, MoonshineError::InvalidArgument(_)));
 }
+
+#[test]
+#[ignore = "needs native libraries: make test-ffi"]
+fn tts_voices_list_prefixed_ids_and_what_is_on_disk() {
+    let library = MoonshineLibrary::load(&native_lib_dir()).unwrap();
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("kokoro/voices")).unwrap();
+    std::fs::write(root.path().join("kokoro/voices/zm_yunxi.kokorovoice"), b"").unwrap();
+    let root = root.path().to_str().unwrap();
+    let chinese = library
+        .tts_voices("zh_hans", &[("g2p_root", root)])
+        .unwrap();
+    let ids: Vec<&str> = chinese.iter().map(|voice| voice.id.as_str()).collect();
+    assert!(ids.contains(&"kokoro_zf_xiaoxiao"), "{ids:?}");
+    assert!(ids.contains(&"piper_zh_CN-huayan-medium"), "{ids:?}");
+    assert!(!ids.contains(&"kokoro_af_heart"), "{ids:?}");
+    let found: Vec<&str> = chinese
+        .iter()
+        .filter(|voice| voice.found)
+        .map(|voice| voice.id.as_str())
+        .collect();
+    assert_eq!(found, ["kokoro_zm_yunxi"]);
+    for tag in ["en_us", "es_es", "ja_jp", "ar_msa", "ko_kr"] {
+        let voices = library.tts_voices(tag, &[("g2p_root", root)]).unwrap();
+        assert!(!voices.is_empty(), "{tag}");
+    }
+}

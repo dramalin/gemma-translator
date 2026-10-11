@@ -19,7 +19,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use translator_core::language::LanguageCode;
-use translator_core::models::ModelPaths;
+use translator_core::models::{ModelPaths, TtsSettings};
 use translator_core::pipeline::{SpeechToText, STT_SAMPLE_RATE};
 use translator_io::audio_device::CapturedAudio;
 use translator_io::chinese_script::spoken_text;
@@ -382,11 +382,12 @@ fn run(args: &Args) -> Result<(), String> {
     let mut languages: Vec<LanguageCode> = clips.iter().map(|clip| clip.language).collect();
     languages.sort_by_key(|language| language.code());
     languages.dedup();
-    let speech = NativeSpeech::spawn_with_trim(
+    let speech = NativeSpeech::spawn_with(
         args.lib_dir.clone(),
         ModelPaths::new(args.model_dir.clone()),
         languages.clone(),
         args.trim,
+        TtsSettings::default(),
     );
     // The first call to each model is slow; keep it out of the timings.
     for &language in &languages {

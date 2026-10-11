@@ -2,6 +2,7 @@
 //! `translator-models` puts every model file. Single source for the native
 //! inference path and the model tool.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::language::LanguageCode;
@@ -30,11 +31,49 @@ pub struct SttModel {
     pub components: &'static [&'static str],
 }
 
-/// Moonshine TTS language tag plus an optional voice override.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Moonshine TTS language tag, voice and speaking rate.
+#[derive(Debug, Clone, PartialEq)]
 pub struct TtsVoice {
     pub language_tag: &'static str,
-    pub voice: Option<&'static str>,
+    /// A Moonshine voice id (`kokoro_...` or `piper_...`), or `None` for
+    /// Moonshine's default for the language.
+    pub voice: Option<String>,
+    pub speed: f64,
+}
+
+/// Moonshine's speaking rate; also the config default.
+pub const DEFAULT_TTS_SPEED: f64 = 1.0;
+/// The speaking rates the config accepts. Moonshine takes any positive rate,
+/// but outside this range speech gets hard to follow.
+pub const TTS_SPEED_RANGE: std::ops::RangeInclusive<f64> = 0.5..=2.0;
+
+/// The config's voice choices and speaking rate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TtsSettings {
+    pub speed: f64,
+    /// Voice ids by language; other languages use `LanguageCode::tts_voice`.
+    pub voices: BTreeMap<LanguageCode, String>,
+}
+
+impl Default for TtsSettings {
+    fn default() -> Self {
+        TtsSettings {
+            speed: DEFAULT_TTS_SPEED,
+            voices: BTreeMap::new(),
+        }
+    }
+}
+
+impl TtsSettings {
+    /// The voice `language` speaks with: the configured one, else the built-in.
+    pub fn voice(&self, language: LanguageCode) -> TtsVoice {
+        let built_in = language.tts_voice();
+        TtsVoice {
+            voice: self.voices.get(&language).cloned().or(built_in.voice),
+            speed: self.speed,
+            ..built_in
+        }
+    }
 }
 
 /// Components of a non-streaming model, as Moonshine publishes them.
@@ -76,10 +115,14 @@ const CJK_TRANSCRIBER_OPTIONS: &[(&str, &str)] =
 impl TtsVoice {
     /// Options for `moonshine_create_tts_synthesizer_from_files` and
     /// `moonshine_get_tts_dependencies`.
-    pub fn synthesizer_options<'a>(&self, tts_root: &'a str) -> Vec<(&'static str, &'a str)> {
-        let mut options = vec![("g2p_root", tts_root)];
-        if let Some(voice) = self.voice {
-            options.push(("voice", voice));
+    /// The speed only matters to the synthesizer and is left out at the default.
+    pub fn synthesizer_options(&self, tts_root: &str) -> Vec<(&'static str, String)> {
+        let mut options = vec![("g2p_root", tts_root.to_string())];
+        if let Some(voice) = &self.voice {
+            options.push(("voice", voice.clone()));
+        }
+        if self.speed != DEFAULT_TTS_SPEED {
+            options.push(("speed", self.speed.to_string()));
         }
         options
     }
@@ -134,6 +177,7 @@ impl LanguageCode {
     }
 
     pub fn tts_voice(self) -> TtsVoice {
+        // zh: Xiaoxiao, softer than Moonshine's default Xiaobei.
         let (language_tag, voice) = match self {
             LanguageCode::Ar => ("ar_msa", None),
             LanguageCode::En => ("en_us", None),
@@ -144,7 +188,8 @@ impl LanguageCode {
         };
         TtsVoice {
             language_tag,
-            voice,
+            voice: voice.map(String::from),
+            speed: DEFAULT_TTS_SPEED,
         }
     }
 }
@@ -263,7 +308,7 @@ mod tests {
             ["ar_msa", "en_us", "es_es", "ja_jp", "zh_hans", "ko_kr"]
         );
         assert_eq!(
-            LanguageCode::Zh.tts_voice().voice,
+            LanguageCode::Zh.tts_voice().voice.as_deref(),
             Some("kokoro_zf_xiaoxiao")
         );
         assert_eq!(LanguageCode::En.tts_voice().voice, None);
@@ -271,13 +316,41 @@ mod tests {
 
     #[test]
     fn synthesizer_options_carry_root_and_optional_voice() {
+        let options = |voice: TtsVoice| voice.synthesizer_options("/m/tts");
         assert_eq!(
-            LanguageCode::Zh.tts_voice().synthesizer_options("/m/tts"),
-            [("g2p_root", "/m/tts"), ("voice", "kokoro_zf_xiaoxiao")]
+            options(LanguageCode::Zh.tts_voice()),
+            [
+                ("g2p_root", "/m/tts".to_string()),
+                ("voice", "kokoro_zf_xiaoxiao".to_string())
+            ]
         );
         assert_eq!(
-            LanguageCode::Es.tts_voice().synthesizer_options("/m/tts"),
-            [("g2p_root", "/m/tts")]
+            options(LanguageCode::Es.tts_voice()),
+            [("g2p_root", "/m/tts".to_string())]
+        );
+    }
+
+    #[test]
+    fn configured_voices_and_speed_override_the_built_in_ones() {
+        let settings = TtsSettings {
+            speed: 1.25,
+            voices: BTreeMap::from([(LanguageCode::Zh, "kokoro_zm_yunxi".to_string())]),
+        };
+        assert_eq!(
+            settings
+                .voice(LanguageCode::Zh)
+                .synthesizer_options("/m/tts"),
+            [
+                ("g2p_root", "/m/tts".to_string()),
+                ("voice", "kokoro_zm_yunxi".to_string()),
+                ("speed", "1.25".to_string())
+            ]
+        );
+        let english = settings.voice(LanguageCode::En);
+        assert_eq!((english.voice, english.speed), (None, 1.25));
+        assert_eq!(
+            TtsSettings::default().voice(LanguageCode::Zh),
+            LanguageCode::Zh.tts_voice()
         );
     }
 

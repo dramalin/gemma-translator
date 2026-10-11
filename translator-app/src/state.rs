@@ -22,6 +22,7 @@ use translator_io::blip::{synthesize_blip, BLIP_SAMPLE_RATE};
 use translator_io::native::{self, speech::NativeSpeech, translator::NativeTranslator};
 use translator_io::playback_queue::{DiscardingSink, PlaybackSink};
 use translator_io::runner::{JobRunner, Services};
+use translator_io::speech_trim::TrimMode;
 use translator_io::volume::{CommandRunner, SystemCommandRunner, VolumeWorker};
 
 use crate::mock;
@@ -370,10 +371,12 @@ impl AppState {
 fn native_services(config: &Config, model_dir_override: Option<&Path>) -> Services {
     let lib_dir = native::default_lib_dir();
     let paths = ModelPaths::new(model_root(config, model_dir_override));
-    let speech = Arc::new(NativeSpeech::spawn(
+    let speech = Arc::new(NativeSpeech::spawn_with(
         lib_dir.clone(),
         paths.clone(),
         vec![config.lane1_language, config.lane2_language],
+        TrimMode::Adaptive,
+        config.tts_settings(),
     ));
     Services {
         stt: speech.clone(),

@@ -6,6 +6,6 @@ mod library;
 mod synthesizer;
 mod transcriber;
 
-pub use library::{MoonshineError, MoonshineLibrary, LIBRARY_FILE_NAME};
+pub use library::{MoonshineError, MoonshineLibrary, TtsVoiceEntry, LIBRARY_FILE_NAME};
 pub use synthesizer::Synthesizer;
 pub use transcriber::{ModelArch, Transcriber};

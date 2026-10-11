@@ -5,16 +5,18 @@ mod catalog;
 mod download;
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use moonshine_sys::MoonshineLibrary;
+use translator_core::config::Config;
 use translator_core::language::LanguageCode;
-use translator_core::models::ModelPaths;
+use translator_core::models::{ModelPaths, TtsSettings, TtsVoice};
 
 use crate::download::{ensure_file, DownloadOutcome};
 
-const USAGE: &str = "usage: translator-models --model-dir <dir> [--lib-dir <dir>]";
+const USAGE: &str =
+    "usage: translator-models --model-dir <dir> [--lib-dir <dir>] [--config <file>] [--list-voices]";
 /// Files at least this large get progress lines while they download.
 const PROGRESS_MIN_BYTES: u64 = 64 << 20;
 
@@ -22,15 +24,27 @@ const PROGRESS_MIN_BYTES: u64 = 64 << 20;
 struct Options {
     model_dir: PathBuf,
     lib_dir: PathBuf,
+    /// The translator's config, for its `tts_voices`; `None` uses the
+    /// default path.
+    config: Option<PathBuf>,
+    /// Print every voice instead of downloading.
+    list_voices: bool,
 }
 
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut model_dir = None;
     let mut lib_dir = None;
+    let mut config = None;
+    let mut list_voices = false;
     while let Some(argument) = args.next() {
         let target = match argument.as_str() {
             "--model-dir" => &mut model_dir,
             "--lib-dir" => &mut lib_dir,
+            "--config" => &mut config,
+            "--list-voices" => {
+                list_voices = true;
+                continue;
+            }
             other => return Err(format!("unknown argument {other:?}")),
         };
         let value = args
@@ -44,6 +58,8 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Options, String>
             Some(directory) => directory,
             None => default_lib_dir()?,
         },
+        config,
+        list_voices,
     })
 }
 
@@ -75,7 +91,16 @@ fn main() -> ExitCode {
 fn run(options: &Options) -> Result<(), String> {
     let paths = ModelPaths::new(&options.model_dir);
     let library = MoonshineLibrary::load(&options.lib_dir).map_err(|error| error.to_string())?;
-    let tts_keys = collect_tts_keys(&library, &paths)?;
+    let root = paths.tts_root();
+    let root = root
+        .to_str()
+        .ok_or("model directory path is not valid UTF-8")?;
+    if options.list_voices {
+        return list_voices(&library, root);
+    }
+    let tts = load_tts_settings(options.config.as_deref())?;
+    check_voices(&library, root, &tts)?;
+    let tts_keys = collect_tts_keys(&library, root, &tts)?;
 
     let mut files = vec![catalog::gemma_file(&paths)];
     files.extend(catalog::stt_files(&paths));
@@ -134,31 +159,110 @@ fn progress_tenth(received: u64, total: Option<u64>) -> Option<u64> {
     Some(received.min(total) * 10 / total)
 }
 
+/// The voices and speed from `path`, or from the default config path. A
+/// missing file means the built-in voices.
+fn load_tts_settings(path: Option<&Path>) -> Result<TtsSettings, String> {
+    let Some(path) = path.map(Path::to_path_buf).or_else(Config::default_path) else {
+        return Ok(TtsSettings::default());
+    };
+    let config = Config::load(&path).map_err(|error| error.to_string())?;
+    for (language, voice) in &config.tts_voices {
+        println!(
+            "voice    {} = {voice} (from {})",
+            language.code(),
+            path.display()
+        );
+    }
+    Ok(config.tts_settings())
+}
+
+/// Fails on a configured voice that is not one of its language's voices:
+/// Moonshine would quietly speak with its default voice instead.
+fn check_voices(library: &MoonshineLibrary, root: &str, tts: &TtsSettings) -> Result<(), String> {
+    let mut problems = Vec::new();
+    for (&language, id) in &tts.voices {
+        let tag = language.tts_voice().language_tag;
+        let known = library
+            .tts_voices(tag, &[("g2p_root", root)])
+            .map_err(|error| error.to_string())?;
+        if !known.iter().any(|voice| voice.id == *id) {
+            let ids: Vec<&str> = known.iter().map(|voice| voice.id.as_str()).collect();
+            problems.push(format!(
+                "tts_voices.{} = {id:?} is not a {tag} voice; choose one of: {}",
+                language.code(),
+                ids.join(", ")
+            ));
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(problems.join("\n"))
+    }
+}
+
+/// Every voice Moonshine offers per language, marking the downloaded ones.
+fn list_voices(library: &MoonshineLibrary, root: &str) -> Result<(), String> {
+    for language in LanguageCode::ALL {
+        let built_in = language.tts_voice();
+        let voices = library
+            .tts_voices(built_in.language_tag, &[("g2p_root", root)])
+            .map_err(|error| error.to_string())?;
+        println!("{} ({}):", language.code(), built_in.language_tag);
+        for voice in voices {
+            let mark = if voice.found { "*" } else { " " };
+            println!("  {mark} {}", voice.id);
+        }
+    }
+    println!("* = downloaded. Set one per language under [tts_voices] in config.toml.");
+    Ok(())
+}
+
+/// Asset keys for each language's built-in voice and its configured one.
+/// The built-in voices are always fetched, so a package built with one
+/// config still speaks under another config's defaults.
 fn collect_tts_keys(
     library: &MoonshineLibrary,
-    paths: &ModelPaths,
+    root: &str,
+    tts: &TtsSettings,
 ) -> Result<BTreeSet<String>, String> {
-    let root = paths.tts_root();
-    let root = root
-        .to_str()
-        .ok_or("model directory path is not valid UTF-8")?;
     let mut keys = BTreeSet::new();
     for language in LanguageCode::ALL {
-        let voice = language.tts_voice();
-        let dependencies = library
-            .tts_dependencies(voice.language_tag, &voice.synthesizer_options(root))
-            .map_err(|error| error.to_string())?;
-        // Keys without a '/' are G2P override labels, not files.
-        let files: Vec<String> = dependencies
-            .into_iter()
-            .filter(|key| key.contains('/'))
-            .collect();
-        if files.is_empty() {
-            return Err(format!("no TTS assets listed for {}", voice.language_tag));
+        let configured = tts.voice(language);
+        let built_in = language.tts_voice();
+        let mut voices = vec![built_in];
+        if configured.voice != voices[0].voice {
+            voices.push(configured);
         }
-        keys.extend(files);
+        for voice in voices {
+            keys.extend(voice_keys(library, root, &voice)?);
+        }
     }
     Ok(keys)
+}
+
+fn voice_keys(
+    library: &MoonshineLibrary,
+    root: &str,
+    voice: &TtsVoice,
+) -> Result<Vec<String>, String> {
+    let options = voice.synthesizer_options(root);
+    let options: Vec<(&str, &str)> = options
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
+    let dependencies = library
+        .tts_dependencies(voice.language_tag, &options)
+        .map_err(|error| error.to_string())?;
+    // Keys without a '/' are G2P override labels, not files.
+    let files: Vec<String> = dependencies
+        .into_iter()
+        .filter(|key| key.contains('/'))
+        .collect();
+    if files.is_empty() {
+        return Err(format!("no TTS assets listed for {}", voice.language_tag));
+    }
+    Ok(files)
 }
 
 #[cfg(test)]
@@ -179,8 +283,41 @@ mod tests {
             Ok(Options {
                 model_dir: PathBuf::from("/m"),
                 lib_dir: PathBuf::from("/l"),
+                config: None,
+                list_voices: false,
             })
         );
+    }
+
+    #[test]
+    fn parses_config_and_list_voices() {
+        let options = parse_args(args(&[
+            "--model-dir",
+            "/m",
+            "--lib-dir",
+            "/l",
+            "--config",
+            "/c.toml",
+            "--list-voices",
+        ]))
+        .unwrap();
+        assert_eq!(options.config, Some(PathBuf::from("/c.toml")));
+        assert!(options.list_voices);
+    }
+
+    #[test]
+    fn a_missing_config_file_means_the_built_in_voices() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings = load_tts_settings(Some(&dir.path().join("config.toml"))).unwrap();
+        assert_eq!(settings, TtsSettings::default());
+    }
+
+    #[test]
+    fn an_invalid_config_file_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[tts_voices]\nxx = \"a\"\n").unwrap();
+        assert!(load_tts_settings(Some(&path)).is_err());
     }
 
     #[test]

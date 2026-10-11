@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A language offered on the lane revolvers. Serialized as its lowercase code.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum LanguageCode {
     Ar,

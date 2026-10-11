@@ -121,6 +121,22 @@ sudo systemctl disable gemma-translator && sudo systemctl set-default graphical.
 
 Settings are stored in `~/.config/gemma-translator/config.toml` (or under `$XDG_CONFIG_HOME`; on the Pi, in the home directory of the user that ran `sudo ./install.sh`; `--config <path>` uses another file). Press `Esc` to open the settings panel (↑/↓ select, ←/→ change). Recordings shorter than 300 ms are ignored.
 
+### Voices
+
+Spoken output can be slowed down or sped up, and each language can use another Moonshine voice:
+
+```toml
+tts_speed = 0.9                  # 0.5-2.0; 1.0 is the normal pace
+
+[tts_voices]
+zh = "kokoro_zm_yunxi"           # male Mandarin instead of kokoro_zf_xiaoxiao
+es = "piper_es_MX-ald-medium"    # a Piper voice instead of Kokoro's ef_dora
+```
+
+`make voices` lists every voice per language and marks the downloaded ones. A new voice needs its files: run `make models` again (it reads the same `config.toml`; `CONFIG=<file>` points it at another). It stops with the list of valid ids if a voice is not one of that language's. The built-in voices are always downloaded too. The translator reads both settings at start-up. If a configured voice is unknown or not downloaded, it logs why and speaks that language with the built-in voice.
+
+For the Pi, the package carries the voices of the config `make models` read: run `make models CONFIG=<the Pi's config.toml>` before `make package-pi`.
+
 ## Speech Recognition Tips
 
 - Speak within about 30 cm of the microphone. A MacBook Pro's built-in microphone gave error-free Chinese at 20-30 cm and one or two wrong characters at 50 cm; raising the input gain did not help, since it raises the noise too.
@@ -133,6 +149,7 @@ Settings are stored in `~/.config/gemma-translator/config.toml` (or under `$XDG_
 make             # list every target
 make native-libs # fetch the pinned libmoonshine (+ onnxruntime) / liblitert-lm into native/<arch>/lib
 make models      # download the models into MODEL_DIR (default ./models)
+make voices      # list the TTS voices for [tts_voices] in config.toml
 make test        # all Rust tests
 make clippy      # lint, warnings are errors
 make test-ffi    # tests that need the native libraries and models (after make models)
